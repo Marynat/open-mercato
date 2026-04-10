@@ -16,37 +16,25 @@ type CellEntry = { id?: string; minutes: number }
 type EntryMap = Record<string, Record<string, CellEntry[]>>
 type DirtyMap = Record<string, Record<string, CellEntry>>
 type RawTextMap = Record<string, Record<string, string>>
+type ViewMode = 'monthly' | 'weekly'
 
-function getDaysInMonth(year: number, month: number): number {
-  return new Date(year, month + 1, 0).getDate()
-}
+import {
+  getDaysInMonth,
+  formatDateKey,
+  formatDateFromObj,
+  getMonWeekStart,
+  isWeekendFromKey,
+  minutesToDecimal,
+  decimalToMinutes,
+  minutesToHoursLabel,
+  getProjectColor,
+  parseViewMode,
+  TIMESHEET_VIEW_MODE_KEY,
+} from '@open-mercato/core/modules/staff/lib/timesheetUtils'
 
-function formatDateKey(year: number, month: number, day: number): string {
-  const m = String(month + 1).padStart(2, '0')
-  const d = String(day).padStart(2, '0')
-  return `${year}-${m}-${d}`
-}
+const DAY_NAMES_SHORT = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
 
-function minutesToDecimal(minutes: number): string {
-  if (minutes === 0) return ''
-  const hours = minutes / 60
-  return hours % 1 === 0 ? String(hours) : hours.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')
-}
-
-function decimalToMinutes(value: string): number {
-  const trimmed = value.trim()
-  if (!trimmed) return 0
-  const num = parseFloat(trimmed)
-  if (isNaN(num) || num < 0) return 0
-  return Math.min(Math.round(num * 60), 1440)
-}
-
-function isWeekendDay(year: number, month: number, day: number): boolean {
-  const d = new Date(year, month, day).getDay()
-  return d === 0 || d === 6
-}
-
-const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+// ─── Component ───────────────────────────────────────────────────────────────
 
 export default function MyTimesheetsPage() {
   const t = useT()
@@ -54,8 +42,10 @@ export default function MyTimesheetsPage() {
   const { confirm, ConfirmDialogElement } = useConfirmDialog()
 
   const now = new Date()
+  const [viewMode, setViewMode] = React.useState<ViewMode>('monthly') // SSR-safe fallback; storage read in effect below
   const [year, setYear] = React.useState(now.getFullYear())
   const [month, setMonth] = React.useState(now.getMonth())
+  const [weekStart, setWeekStart] = React.useState(() => getMonWeekStart(now))
   const [projects, setProjects] = React.useState<ProjectRow[]>([])
   const [entries, setEntries] = React.useState<EntryMap>({})
   const [dirty, setDirty] = React.useState<DirtyMap>({})
@@ -86,26 +76,83 @@ export default function MyTimesheetsPage() {
   }, [])
 
   const daysInMonth = getDaysInMonth(year, month)
-  const days = React.useMemo(() => Array.from({ length: daysInMonth }, (_, i) => i + 1), [daysInMonth])
 
-  const monthLabel = React.useMemo(() => {
-    const date = new Date(year, month, 1)
-    return date.toLocaleString(undefined, { month: 'long', year: 'numeric' })
-  }, [year, month])
-
-  const goToPrevMonth = React.useCallback(() => {
-    setMonth((prev) => {
-      if (prev === 0) { setYear((y) => y - 1); return 11 }
-      return prev - 1
+  const periodDays = React.useMemo<string[]>(() => {
+    if (viewMode === 'monthly') {
+      return Array.from({ length: daysInMonth }, (_, i) => formatDateKey(year, month, i + 1))
+    }
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(weekStart)
+      d.setDate(d.getDate() + i)
+      return formatDateFromObj(d)
     })
+  }, [viewMode, year, month, daysInMonth, weekStart])
+
+  const fromDate = periodDays[0] ?? ''
+  const toDate = periodDays[periodDays.length - 1] ?? ''
+
+  const periodLabel = React.useMemo(() => {
+    if (viewMode === 'monthly') {
+      return new Date(year, month, 1).toLocaleString(undefined, { month: 'long', year: 'numeric' })
+    }
+    const start = new Date(fromDate + 'T00:00:00')
+    const end = new Date(toDate + 'T00:00:00')
+    const startStr = start.toLocaleString(undefined, { month: 'short', day: 'numeric' })
+    const endStr = end.toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+    return `${startStr} – ${endStr}`
+  }, [viewMode, year, month, fromDate, toDate])
+
+  const goToPrev = React.useCallback(() => {
+    setDirty({})
+    setRawText({})
+    if (viewMode === 'monthly') {
+      setMonth((prev) => {
+        if (prev === 0) { setYear((y) => y - 1); return 11 }
+        return prev - 1
+      })
+    } else {
+      setWeekStart((prev) => {
+        const d = new Date(prev)
+        d.setDate(d.getDate() - 7)
+        return d
+      })
+    }
+  }, [viewMode])
+
+  const goToNext = React.useCallback(() => {
+    setDirty({})
+    setRawText({})
+    if (viewMode === 'monthly') {
+      setMonth((prev) => {
+        if (prev === 11) { setYear((y) => y + 1); return 0 }
+        return prev + 1
+      })
+    } else {
+      setWeekStart((prev) => {
+        const d = new Date(prev)
+        d.setDate(d.getDate() + 7)
+        return d
+      })
+    }
+  }, [viewMode])
+
+  React.useEffect(() => {
+    setViewMode(parseViewMode(localStorage.getItem(TIMESHEET_VIEW_MODE_KEY)))
   }, [])
 
-  const goToNextMonth = React.useCallback(() => {
-    setMonth((prev) => {
-      if (prev === 11) { setYear((y) => y + 1); return 0 }
-      return prev + 1
-    })
-  }, [])
+  const handleSetViewMode = React.useCallback((mode: ViewMode) => {
+    if (mode === viewMode) return
+    setDirty({})
+    setRawText({})
+    if (mode === 'weekly') {
+      setWeekStart(getMonWeekStart(new Date(year, month, 1)))
+    } else {
+      setYear(weekStart.getFullYear())
+      setMonth(weekStart.getMonth())
+    }
+    localStorage.setItem(TIMESHEET_VIEW_MODE_KEY, mode)
+    setViewMode(mode)
+  }, [viewMode, year, month, weekStart])
 
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
@@ -126,9 +173,6 @@ export default function MyTimesheetsPage() {
       }
       setStaffMemberMissing(false)
 
-      const fromDate = formatDateKey(year, month, 1)
-      const toDate = formatDateKey(year, month, daysInMonth)
-
       // Spec N+1 Mitigation — 3-query strategy:
       // Query 1: Fetch staff_time_project_members for this staff member (assigned projects)
       const assignmentsRes = await readApiResultOrThrow<{ items?: Array<Record<string, unknown>> }>(
@@ -141,9 +185,6 @@ export default function MyTimesheetsPage() {
         .map((item) => String(item.time_project_id ?? item.timeProjectId ?? ''))
         .filter((id) => id.length > 0)
 
-      // Query 2: Fetch staff_time_projects by IDs from query 1
-      // Query 3: Fetch staff_time_entries for date range
-      // (queries 2 and 3 run in parallel)
       const [projectsRes, entriesRes] = await Promise.all([
         assignedProjectIds.length > 0
           ? readApiResultOrThrow<{ items?: Array<Record<string, unknown>> }>(
@@ -191,7 +232,7 @@ export default function MyTimesheetsPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [year, month, daysInMonth, t])
+  }, [fromDate, toDate, t])
 
   React.useEffect(() => {
     void loadData()
@@ -282,23 +323,106 @@ export default function MyTimesheetsPage() {
     }
   }, [dirty, entries, hasChanges, confirm, t, loadData])
 
+  const handleCopyLastPeriod = React.useCallback(async () => {
+    if (!staffMemberId) return
+
+    // Build index-aligned previous-period day array.
+    // For weekly: -7 days is always safe.
+    // For monthly: compute the previous month once to avoid Date.setMonth() overflow
+    // (e.g. March 31 → setMonth(Jan) overflows to Feb 3 in non-leap years).
+    const prevDays: (string | null)[] = (() => {
+      if (viewMode === 'weekly') {
+        return periodDays.map((dateKey) => {
+          const d = new Date(dateKey + 'T00:00:00')
+          d.setDate(d.getDate() - 7)
+          return formatDateFromObj(d)
+        })
+      }
+      const firstOfCurrent = new Date(periodDays[0] + 'T00:00:00')
+      const prevYear = firstOfCurrent.getMonth() === 0
+        ? firstOfCurrent.getFullYear() - 1
+        : firstOfCurrent.getFullYear()
+      const prevMonth = firstOfCurrent.getMonth() === 0 ? 11 : firstOfCurrent.getMonth() - 1
+      const daysInPrev = getDaysInMonth(prevYear, prevMonth)
+      return periodDays.map((dateKey) => {
+        const dayNum = new Date(dateKey + 'T00:00:00').getDate()
+        return dayNum <= daysInPrev ? formatDateKey(prevYear, prevMonth, dayNum) : null
+      })
+    })()
+
+    const validPrevDays = prevDays.filter((d): d is string => d !== null)
+    const prevFrom = validPrevDays[0] ?? ''
+    const prevTo = validPrevDays[validPrevDays.length - 1] ?? ''
+    if (!prevFrom || !prevTo) return
+
+    // Only copy into rows the user can see in the current grid (finding #3).
+    const currentProjectIds = new Set(projects.map((p) => p.id))
+
+    try {
+      const res = await readApiResultOrThrow<{ items?: Array<Record<string, unknown>> }>(
+        `/api/staff/timesheets/time-entries?pageSize=100&staffMemberId=${staffMemberId}&from=${prevFrom}&to=${prevTo}`,
+        undefined,
+        { errorMessage: t('staff.timesheets.my.errors.load', 'Failed to load timesheets.'), fallback: { items: [] } },
+      )
+
+      const entryItems = Array.isArray(res.items) ? res.items : []
+      setDirty((prev) => {
+        const next = { ...prev }
+        for (const item of entryItems) {
+          const projectId = String(item.time_project_id ?? item.timeProjectId ?? '')
+          const rawDate = String(item.date ?? '')
+          const srcDateKey = rawDate.slice(0, 10)
+          const minutes = typeof item.duration_minutes === 'number'
+            ? item.duration_minutes
+            : typeof item.durationMinutes === 'number'
+              ? item.durationMinutes
+              : 0
+          if (!projectId || minutes === 0) continue
+
+          // Skip projects not visible in the current grid (finding #3)
+          if (!currentProjectIds.has(projectId)) continue
+
+          const srcIdx = prevDays.indexOf(srcDateKey)
+          if (srcIdx < 0) continue
+          const targetDateKey = periodDays[srcIdx]
+          if (!targetDateKey) continue
+
+          // Only copy into empty cells — also check in-progress rawText (finding #2)
+          const existingMinutes = (next[projectId]?.[targetDateKey]?.minutes)
+            ?? entries[projectId]?.[targetDateKey]?.reduce((s, e) => s + e.minutes, 0)
+            ?? 0
+          const pendingMinutes = rawText[projectId]?.[targetDateKey] !== undefined
+            ? decimalToMinutes(rawText[projectId]![targetDateKey]!)
+            : 0
+          if (existingMinutes > 0 || pendingMinutes > 0) continue
+
+          if (!next[projectId]) next[projectId] = {}
+          next[projectId][targetDateKey] = { minutes }
+        }
+        return next
+      })
+
+      flash(t('staff.timesheets.my.copiedLastPeriod', 'Copied from last period.'), 'success')
+    } catch {
+      flash(t('staff.timesheets.my.errors.load', 'Failed to load timesheets.'), 'error')
+    }
+  }, [staffMemberId, periodDays, viewMode, projects, entries, rawText, t])
+
   const getRowTotal = React.useCallback((projectId: string): number => {
     let total = 0
-    for (const day of days) {
-      const dateKey = formatDateKey(year, month, day)
+    for (const dateKey of periodDays) {
       total += getCellValue(projectId, dateKey)
     }
     return total
-  }, [days, year, month, getCellValue])
+  }, [periodDays, getCellValue])
 
-  const getDayTotal = React.useCallback((day: number): number => {
-    const dateKey = formatDateKey(year, month, day)
+  const getDayTotal = React.useCallback((dateKey: string): number => {
     let total = 0
     for (const project of projects) {
       total += getCellValue(project.id, dateKey)
     }
     return total
-  }, [year, month, projects, getCellValue])
+  }, [projects, getCellValue])
 
   const grandTotal = React.useMemo(() => {
     let total = 0
@@ -310,9 +434,8 @@ export default function MyTimesheetsPage() {
 
   const workingDays = React.useMemo(() => {
     let count = 0
-    for (const day of days) {
-      if (!isWeekendDay(year, month, day)) {
-        const dateKey = formatDateKey(year, month, day)
+    for (const dateKey of periodDays) {
+      if (!isWeekendFromKey(dateKey)) {
         let dayHasHours = false
         for (const project of projects) {
           if (getCellValue(project.id, dateKey) > 0) { dayHasHours = true; break }
@@ -321,7 +444,7 @@ export default function MyTimesheetsPage() {
       }
     }
     return count
-  }, [days, year, month, projects, getCellValue])
+  }, [periodDays, projects, getCellValue])
 
   const dailyAverage = React.useMemo(() => {
     if (workingDays === 0) return 0
@@ -354,6 +477,10 @@ export default function MyTimesheetsPage() {
     )
   }
 
+  const copyLabel = viewMode === 'weekly'
+    ? t('staff.timesheets.my.copyLastWeek', 'Copy last week')
+    : t('staff.timesheets.my.copyLastMonth', 'Copy last month')
+
   return (
     <Page>
       <PageBody>
@@ -361,7 +488,7 @@ export default function MyTimesheetsPage() {
         <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-4">
           <div className="rounded-lg border bg-card p-4">
             <p className="text-sm text-muted-foreground">{t('staff.timesheets.my.total_hours', 'Total Hours')}</p>
-            <p className="text-2xl font-semibold">{minutesToDecimal(grandTotal) || '0'}</p>
+            <p className="text-2xl font-semibold">{minutesToHoursLabel(grandTotal)}</p>
           </div>
           <div className="rounded-lg border bg-card p-4">
             <p className="text-sm text-muted-foreground">{t('staff.timesheets.my.working_days', 'Working Days')}</p>
@@ -369,7 +496,7 @@ export default function MyTimesheetsPage() {
           </div>
           <div className="rounded-lg border bg-card p-4">
             <p className="text-sm text-muted-foreground">{t('staff.timesheets.my.daily_average', 'Daily Average')}</p>
-            <p className="text-2xl font-semibold">{minutesToDecimal(Math.round(dailyAverage)) || '0'}</p>
+            <p className="text-2xl font-semibold">{minutesToHoursLabel(Math.round(dailyAverage))}</p>
           </div>
           <div className="rounded-lg border bg-card p-4">
             <p className="text-sm text-muted-foreground">{t('staff.timesheets.my.status', 'Status')}</p>
@@ -381,14 +508,34 @@ export default function MyTimesheetsPage() {
           </div>
         </div>
 
-        {/* Month navigation + save */}
-        <div className="mb-4 flex items-center justify-between">
+        {/* Period navigation + view toggle + save */}
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={goToPrevMonth}>&larr;</Button>
-            <span className="text-lg font-semibold min-w-[180px] text-center">{monthLabel}</span>
-            <Button variant="outline" size="sm" onClick={goToNextMonth}>&rarr;</Button>
+            <Button variant="outline" size="sm" onClick={goToPrev}>&larr;</Button>
+            <span className="text-lg font-semibold min-w-[180px] text-center">{periodLabel}</span>
+            <Button variant="outline" size="sm" onClick={goToNext}>&rarr;</Button>
           </div>
           <div className="flex items-center gap-2">
+            <div className="flex overflow-hidden rounded-md border">
+              <Button
+                type="button"
+                size="sm"
+                variant={viewMode === 'monthly' ? 'default' : 'ghost'}
+                className="rounded-none"
+                onClick={() => handleSetViewMode('monthly')}
+              >
+                {t('staff.timesheets.my.view_monthly', 'Monthly')}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={viewMode === 'weekly' ? 'default' : 'ghost'}
+                className="rounded-none border-l"
+                onClick={() => handleSetViewMode('weekly')}
+              >
+                {t('staff.timesheets.my.view_weekly', 'Weekly')}
+              </Button>
+            </div>
             {hasChanges && (
               <span className="text-xs text-amber-600 font-medium">
                 {t('staff.timesheets.my.unsaved', 'Unsaved changes')}
@@ -427,99 +574,146 @@ export default function MyTimesheetsPage() {
             </div>
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-muted/50">
-                  <th className="sticky left-0 z-10 bg-muted px-3 py-2 text-left font-medium min-w-[160px]">
-                    {t('staff.timesheets.my.project', 'Project')}
-                  </th>
-                  {days.map((day) => {
-                    const dateObj = new Date(year, month, day)
-                    const dayName = DAY_NAMES[dateObj.getDay()]
-                    const isWeekend = isWeekendDay(year, month, day)
+          <>
+            {/* Project distribution bar */}
+            {grandTotal > 0 && (
+              <div className="mb-3 flex h-5 w-full overflow-hidden rounded-full">
+                {projects.map((project, index) => {
+                  const projectTotal = getRowTotal(project.id)
+                  if (projectTotal === 0) return null
+                  const pct = (projectTotal / grandTotal) * 100
+                  const color = getProjectColor(index)
+                  return (
+                    <div
+                      key={project.id}
+                      className="flex items-center overflow-hidden px-2"
+                      style={{ width: `${pct}%`, backgroundColor: color, minWidth: 0 }}
+                      title={`${project.name}: ${minutesToHoursLabel(projectTotal)}`}
+                    >
+                      <span className="truncate text-xs font-medium text-white">{project.name}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            <div className="overflow-x-auto rounded-lg border">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-muted/50">
+                    <th className={`sticky left-0 z-10 bg-muted px-3 py-2 text-left font-medium ${viewMode === 'weekly' ? 'min-w-[240px]' : 'min-w-[200px]'}`}>
+                      {t('staff.timesheets.my.project', 'Project')}
+                    </th>
+                    {periodDays.map((dateKey) => {
+                      const dateObj = new Date(dateKey + 'T00:00:00')
+                      const dayName = DAY_NAMES_SHORT[dateObj.getDay()]
+                      const dayNum = dateObj.getDate()
+                      const isWeekend = isWeekendFromKey(dateKey)
+                      return (
+                        <th
+                          key={dateKey}
+                          className={`py-2 text-center font-medium ${viewMode === 'weekly' ? 'px-0.5 min-w-[40px]' : 'px-1 min-w-[56px]'} ${isWeekend ? 'bg-muted/80 text-muted-foreground' : ''}`}
+                        >
+                          <div className="text-xs text-muted-foreground">{dayName}</div>
+                          <div>{dayNum}</div>
+                        </th>
+                      )
+                    })}
+                    <th className="px-3 py-2 text-center font-medium min-w-[72px]">
+                      {t('staff.timesheets.my.total', 'Total')}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {projects.map((project, index) => {
+                    const color = getProjectColor(index)
                     return (
-                      <th
-                        key={day}
-                        className={`px-1 py-2 text-center font-medium min-w-[52px] ${isWeekend ? 'bg-muted/80 text-muted-foreground' : ''}`}
-                      >
-                        <div className="text-xs text-muted-foreground">{dayName}</div>
-                        <div>{day}</div>
-                      </th>
+                      <tr key={project.id} className="border-b hover:bg-muted/30">
+                        <td className="sticky left-0 z-10 bg-background px-3 py-1.5">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span
+                              className="h-2.5 w-2.5 shrink-0 rounded-full"
+                              style={{ backgroundColor: color }}
+                            />
+                            <div className="min-w-0">
+                              <div className={`truncate font-medium ${viewMode === 'weekly' ? '' : 'max-w-[130px]'}`} title={project.name}>
+                                {project.name}
+                              </div>
+                              {project.code && (
+                                <div className="text-xs text-muted-foreground">{project.code}</div>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                        {periodDays.map((dateKey) => {
+                          const isWeekend = isWeekendFromKey(dateKey)
+                          const cellMinutes = getCellValue(project.id, dateKey)
+                          const isDirty = dirty[project.id]?.[dateKey] !== undefined
+                          return (
+                            <td
+                              key={dateKey}
+                              className={`py-0.5 ${viewMode === 'weekly' ? 'px-2' : 'px-0.5'} ${isWeekend ? 'bg-muted/40' : ''}`}
+                            >
+                              {isWeekend ? (
+                                <div className="w-full rounded px-1 py-1 text-center text-xs text-muted-foreground/50">
+                                  -
+                                </div>
+                              ) : (
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  className={`${viewMode === 'weekly' ? 'w-12 mx-auto' : 'w-full'} block rounded border bg-background px-1 py-1 text-center text-xs transition-colors
+                                    ${isDirty ? 'border-amber-400' : 'border-border'}
+                                    ${cellMinutes > 0 ? 'font-bold' : ''}
+                                    hover:border-muted-foreground/40 focus:border-primary focus:outline-none`}
+                                  value={rawText[project.id]?.[dateKey] ?? minutesToDecimal(cellMinutes)}
+                                  onChange={(e) => handleCellChange(project.id, dateKey, e.target.value)}
+                                  onBlur={() => handleCellBlur(project.id, dateKey)}
+                                  placeholder="0"
+                                />
+                              )}
+                            </td>
+                          )
+                        })}
+                        <td className="px-3 py-1.5 text-center font-semibold text-sm">
+                          {minutesToHoursLabel(getRowTotal(project.id))}
+                        </td>
+                      </tr>
                     )
                   })}
-                  <th className="px-3 py-2 text-center font-medium min-w-[64px]">
-                    {t('staff.timesheets.my.total', 'Total')}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {projects.map((project) => (
-                  <tr key={project.id} className="border-b hover:bg-muted/30">
-                    <td className="sticky left-0 z-10 bg-background px-3 py-1.5 font-medium">
-                      <div className="truncate max-w-[150px]" title={project.name}>
-                        {project.name}
-                      </div>
-                      {project.code && (
-                        <div className="text-xs text-muted-foreground">{project.code}</div>
-                      )}
-                    </td>
-                    {days.map((day) => {
-                      const dateKey = formatDateKey(year, month, day)
-                      const isWeekend = isWeekendDay(year, month, day)
-                      const cellMinutes = getCellValue(project.id, dateKey)
-                      const isDirty = dirty[project.id]?.[dateKey] !== undefined
-                      return (
-                        <td
-                          key={day}
-                          className={`px-0.5 py-0.5 ${isWeekend ? 'bg-muted/40' : ''}`}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t bg-muted/50 font-semibold">
+                    <td className="sticky left-0 z-10 bg-muted px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={handleCopyLastPeriod}
                         >
-                          {isWeekend ? (
-                            <div className="w-full rounded px-1 py-1 text-center text-xs text-muted-foreground/50">
-                              -
-                            </div>
-                          ) : (
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              className={`w-full rounded border px-1 py-1 text-center text-xs transition-colors
-                                ${isDirty ? 'border-amber-400 bg-amber-50' : 'border-transparent bg-transparent'}
-                                ${cellMinutes > 0 ? 'font-bold' : ''}
-                                hover:border-muted-foreground/30 focus:border-primary focus:bg-background focus:outline-none`}
-                              value={rawText[project.id]?.[dateKey] ?? minutesToDecimal(cellMinutes)}
-                              onChange={(e) => handleCellChange(project.id, dateKey, e.target.value)}
-                              onBlur={() => handleCellBlur(project.id, dateKey)}
-                              placeholder="0"
-                            />
-                          )}
+                          {copyLabel}
+                        </Button>
+                        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                          {t('staff.timesheets.my.daily_total', 'Total')}
+                        </span>
+                      </div>
+                    </td>
+                    {periodDays.map((dateKey) => {
+                      const isWeekend = isWeekendFromKey(dateKey)
+                      const dayMinutes = getDayTotal(dateKey)
+                      return (
+                        <td key={dateKey} className={`px-1 py-2 text-center text-xs ${isWeekend ? 'text-muted-foreground/50' : ''}`}>
+                          {isWeekend ? '-' : (dayMinutes > 0 ? minutesToHoursLabel(dayMinutes) : '-')}
                         </td>
                       )
                     })}
-                    <td className="px-3 py-1.5 text-center font-semibold text-sm">
-                      {minutesToDecimal(getRowTotal(project.id)) || '0'}
-                    </td>
+                    <td className="px-3 py-2 text-center">{minutesToHoursLabel(grandTotal)}</td>
                   </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr className="border-t bg-muted/50 font-semibold">
-                  <td className="sticky left-0 z-10 bg-muted px-3 py-2">
-                    {t('staff.timesheets.my.daily_total', 'Daily Total')}
-                  </td>
-                  {days.map((day) => {
-                    const isWeekend = isWeekendDay(year, month, day)
-                    const dayMinutes = getDayTotal(day)
-                    return (
-                      <td key={day} className={`px-1 py-2 text-center text-xs ${isWeekend ? 'text-muted-foreground/50' : ''}`}>
-                        {isWeekend ? '-' : (minutesToDecimal(dayMinutes) || '-')}
-                      </td>
-                    )
-                  })}
-                  <td className="px-3 py-2 text-center">{minutesToDecimal(grandTotal) || '0'}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
+                </tfoot>
+              </table>
+            </div>
+          </>
         )}
       </PageBody>
       {ConfirmDialogElement}

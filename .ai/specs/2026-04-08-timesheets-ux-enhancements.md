@@ -9,7 +9,6 @@
 **Scope:**
 - Weekly view as default with weekly/monthly toggle
 - Calendar date picker for week navigation
-- "+ Add row" with project selector dropdown
 - "Create new project" dialog (full CrudForm, admin only)
 - Project color dots (admin-defined, predefined 12-color palette, auto-generate fallback)
 - Timer bar at the top of My Timesheets page
@@ -28,7 +27,7 @@ Transform the My Timesheets UI from a monthly-only grid into a modern, Toggl-ins
 
 This spec covers frontend UX improvements only. All backend APIs, commands, events, and entities from SPEC-069 Phase 1 are reused without modification (except one additive migration).
 
-> **Market Reference**: Toggl Track (timesheet view). Adopted: weekly grid, "+ Add row" project selector, timer bar, list view, project colors, calendar week picker. Rejected: billable toggle (Phase 3), calendar block view, client grouping, tag system.
+> **Market Reference**: Toggl Track (timesheet view). Adopted: weekly grid, timer bar, list view, project colors, calendar week picker. Rejected: billable toggle (Phase 3), calendar block view, client grouping, tag system.
 
 ## Problem Statement
 
@@ -46,7 +45,6 @@ Rewrite the My Timesheets page (`packages/core/src/modules/staff/backend/staff/t
 1. **View mode state** — `weekly` (default) or `monthly`, persisted in URL query param
 2. **View type state** — `timesheet` (grid) or `list`, persisted in URL query param
 3. **Timer bar component** — top of page, reuses existing timer start/stop API endpoints
-4. **"+ Add row" component** — inline dropdown with project search, admin gets "Create new project"
 5. **Calendar date picker** — dropdown for week selection with quick links
 6. **Project color system** — predefined 12-color palette stored on `staff_time_projects.color`
 
@@ -57,19 +55,26 @@ All changes are frontend-only except the `color` field migration.
 | Decision | Rationale |
 |----------|-----------|
 | Weekly view as default | Most time tracking is done weekly; monthly is secondary |
+| `viewMode` persisted in `localStorage` | The selected view (monthly/weekly) is a personal UI preference, not a shareable state — `localStorage` is the correct store. Key: `staff.timesheets.viewMode`. State initialises to `'monthly'` (SSR-safe); a mount-only `useEffect` reads storage and updates state if a valid value is found. Written on every toggle. URL query param sync remains deferred (Step 3). |
 | Bulk save retained (not auto-save) | SPEC-069 defines bulk save with confirmation; changing save semantics is risky for deadline |
 | Predefined 12-color palette | Simpler UX than hex picker; consistent project colors; matches Toggl pattern |
 | Projects don't auto-appear in grid | User controls which projects are visible; cleaner grid; matches Toggl behavior |
 | Each project appears once in grid | Prevents confusion; time entries aggregate per project+day cell |
 | Timer in grid auto-updates state | When timer stops, grid state updates immediately without page refresh |
+| Decimal hour input format | Consistent with SPEC-069 (line 55, 551) which defines `duration_minutes` integer storage with decimal-hour UI (e.g. `4`, `7.5`); H:MM format is out of scope — minutes are not a supported input unit |
+| Auto-generate project colors — sequential index | Assign colors by project's position index in the loaded list (index % palette length); guarantees visually distinct colors for adjacent projects; deterministic within a page load; replaced by admin-set color in Phase 3 |
+| Weekly grid — adaptive project column and day cell sizing | Monthly view has 31 day columns so space is tight; weekly view has only 7. Project column: `min-w-[240px]`, name text uncapped. Day columns: `min-w-[40px]`, `px-0.5` on `<th>`, `px-2` on `<td>`; input fixed at `w-12 mx-auto` (centered 48px) instead of `w-full`. Monthly keeps current sizing (`min-w-[200px]` project, `min-w-[56px]` days, `max-w-[130px]` name text, `w-full` input). |
+| Distribution bar above grid | At-a-glance project breakdown; proportional segments colored by project; hidden when total is 0 |
+| Copy last period — plain button (no dropdown) | One-click populate current week/month from previous period; copies only to empty cells; no dropdown variants needed at this stage |
+| No billable indicator in grid | "$" icon removed from project rows — billable tracking is Phase 3 scope; visual placeholder adds confusion without backend support |
 
 ## User Stories
 
 1. As an **employee**, I can switch between weekly and monthly views so I can focus on the current week or see the full month.
-2. As an **employee**, I can add projects to my grid via "+ Add row" so I can track time against assigned projects.
-3. As an **employee**, I can start/stop a timer from the My Timesheets page so I don't have to navigate to the dashboard.
-4. As an **employee**, I can see a list view of my entries grouped by day so I have a chronological overview.
-5. As an **employee**, I can navigate to any week using the calendar picker so I can review or edit past time.
+2. As an **employee**, I can start/stop a timer from the My Timesheets page so I don't have to navigate to the dashboard.
+3. As an **employee**, I can see a list view of my entries grouped by day so I have a chronological overview.
+4. As an **employee**, I can navigate to any week using the calendar picker so I can review or edit past time.
+5. As an **employee**, I can add projects to my grid via "+ Add row" so I can track time against assigned projects.
 6. As an **admin**, I can create a new project directly from the "+ Add row" dropdown so I can start tracking immediately.
 7. As an **admin**, I can assign colors to projects so teams can visually identify them in the grid.
 
@@ -86,9 +91,9 @@ MyTimesheetsPage
 │   ├── ViewModeSwitcher         ← Weekly | Monthly toggle
 │   ├── ViewTypeSwitcher         ← List view | Timesheet toggle
 │   └── CalendarDatePicker       ← NEW: week selector dropdown
-├── TimesheetGrid                ← ENHANCED: weekly/monthly, + Add row
+├── TimesheetGrid                ← ENHANCED: weekly/monthly
 │   ├── ProjectRow[]             ← with color dots
-│   ├── AddRowDropdown           ← NEW: project selector + create
+│   ├── AddRowDropdown           ← Phase 2: project selector + create
 │   └── DailyTotalRow
 ├── ListView                     ← NEW: entries grouped by day
 │   └── DayGroup[]
@@ -100,7 +105,6 @@ MyTimesheetsPage
 
 - **Timer bar** → `POST /api/staff/timesheets/time-entries` (create entry) → `POST .../timer-start` → UI shows running state → `POST .../timer-stop` → update local grid state immediately
 - **Grid cells** → collect dirty cells → `POST /api/staff/timesheets/time-entries/bulk` (unchanged)
-- **"+ Add row"** → `GET /api/staff/timesheets/time-projects` (assigned projects) → select → add to local grid state
 - **"Create project"** → open CrudForm dialog → `POST /api/staff/timesheets/time-projects` → auto-assign creator → add to local grid state
 - **List view** → `GET /api/staff/timesheets/time-entries?staffMemberId=...&from=...&to=...` → group by date → render
 
@@ -194,18 +198,14 @@ Validation: `color` must be one of `PROJECT_COLORS[].key` or `null`.
 
 | Key | EN Default |
 |-----|-----------|
-| `staff.timesheets.my.viewMode.weekly` | `Weekly` |
-| `staff.timesheets.my.viewMode.monthly` | `Monthly` |
+| `staff.timesheets.my.view_weekly` | `Weekly` |
+| `staff.timesheets.my.view_monthly` | `Monthly` |
 | `staff.timesheets.my.viewType.timesheet` | `Timesheet` |
 | `staff.timesheets.my.viewType.list` | `List view` |
 | `staff.timesheets.my.timer.placeholder` | `What are you working on?` |
 | `staff.timesheets.my.timer.start` | `Start Timer` |
 | `staff.timesheets.my.timer.stop` | `Stop Timer` |
 | `staff.timesheets.my.timer.running` | `Timer running` |
-| `staff.timesheets.my.addRow` | `+ Add row` |
-| `staff.timesheets.my.addRow.search` | `Search by project` |
-| `staff.timesheets.my.addRow.noProjects` | `No projects assigned` |
-| `staff.timesheets.my.addRow.createProject` | `+ Create a new project` |
 | `staff.timesheets.my.calendar.thisWeek` | `This week` |
 | `staff.timesheets.my.calendar.lastWeek` | `Last week` |
 | `staff.timesheets.my.weekTotal` | `Week Total` |
@@ -213,6 +213,10 @@ Validation: `color` must be one of `PROJECT_COLORS[].key` or `null`.
 | `staff.timesheets.my.list.yesterday` | `Yesterday` |
 | `staff.timesheets.my.list.addDescription` | `Add description` |
 | `staff.timesheets.projects.form.color` | `Project color` |
+| `staff.timesheets.my.copyLastWeek` | `Copy last week` |
+| `staff.timesheets.my.copyLastMonth` | `Copy last month` |
+| `staff.timesheets.my.copiedLastPeriod` | `Copied from last period.` |
+| `staff.timesheets.my.billable` | `Billable` |
 
 ## UI/UX
 
@@ -220,24 +224,33 @@ Validation: `color` must be one of `PROJECT_COLORS[].key` or `null`.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
+│ ██████████████████████████████████ Website ████ Mobile █ API Work ████ │  ← distribution bar
+├──────────────────────────────────────────────────────────────────────────┤
 │ What are you working on?          [Project ▾]   ▶ Play    0:00:00      │
 ├──────────────────────────────────────────────────────────────────────────┤
-│ ◀  W16: 13 - 19 Apr 2026  ▶  [📅]    WEEK TOTAL: 32.5h               │
+│ ◀  W16: 13 - 19 Apr 2026  ▶  [📅]    [Monthly][Weekly]                │
 │                                        [List view] [Timesheet]         │
-│                                        [Weekly ▾]                      │
 ├──────────────────────────────────────────────────────────────────────────┤
-│ PROJECT          MON    TUE    WED    THU    FRI    SAT    SUN   TOTAL │
+│ PROJECT                         MON  TUE  WED  THU  FRI  SAT  SUN  TOTAL │
 ├──────────────────────────────────────────────────────────────────────────┤
-│ 🟢 Website       8.0    7.5    8.0    7.0    8.0     -      -    38.5 │
-│ 🔵 Mobile App    0      0      2.0    3.0    0       -      -     5.0 │
-│ 🟣 API Work      0      0.5    0      1.0    0       -      -     1.5 │
+│ 🟢 Website Redesign 2026        8    7.5  8    7    8     -    -   38.5 h│
+│ 🔵 Mobile App — iOS & Android   0    0    2    3    0     -    -    5.0 h│
+│ 🟣 API Work                     0    0.5  0    1    0     -    -    1.5 h│
 ├──────────────────────────────────────────────────────────────────────────┤
-│ + Add row                                                              │
-├──────────────────────────────────────────────────────────────────────────┤
-│                  TOTAL   8.0    8.0   10.0   11.0    8.0     -      -  │
-│ [Save Changes]                                                         │
+│ [Copy last week]           TOTAL    8 h  8 h  10 h 11 h 8 h   -    -   45 h│
+│ [Unsaved changes]  [Save Changes]                                      │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
+
+Notes:
+- Distribution bar appears above the grid; each segment proportional to project hours; colors assigned by sequential index in loaded project list (guarantees distinct adjacent colors); hidden when total = 0
+- Time cells: decimal hour input (e.g. `4`, `7.5`); placeholder `0`; consistent with SPEC-069
+- Row totals and day totals: `X h` or `X.X h` format (unit always shown)
+- No billable indicator in grid rows — removed; Phase 3 scope
+- `Copy last week` / `Copy last month` — plain button, no dropdown; label adapts to view mode
+- Weekend cells (`SAT`, `SUN`) are read-only, shown as `-`
+- Column headers in weekly mode: uppercase day abbreviation + date number (e.g. `MON\n7`)
+- **Weekly vs monthly column sizing**: weekly project column `min-w-[240px]` (name text uncapped); weekly day cells `min-w-[40px]`, `px-2` on `<td>`, input `w-12 mx-auto` (48px centered); monthly keeps `min-w-[200px]` project, `min-w-[56px]` days, `max-w-[130px]` name text, `w-full` input
 
 ### My Timesheets — List View
 
@@ -287,23 +300,6 @@ Notes:
 └───────────────────────────┘
 ```
 
-### "+ Add Row" Dropdown
-
-```
-┌──────────────────────────────┐
-│ 🔍 Search by project         │
-├──────────────────────────────┤
-│ ● No Project                 │
-├──────────────────────────────┤
-│ 🟢 Website Redesign          │
-│ 🔵 Mobile App                │
-│ 🟣 API Integration           │
-│ 🟠 Internal Tools            │
-├──────────────────────────────┤
-│ + Create a new project       │  ← admin only
-└──────────────────────────────┘
-```
-
 ### Color Picker (in project create/edit)
 
 ```
@@ -340,11 +336,25 @@ ALTER TABLE staff_time_projects
 
 ### Phase 1: Weekly View & Navigation
 
-**Step 1**: Add view mode state and weekly grid layout
-- Add `viewMode` state (`weekly` | `monthly`) with URL query param sync
-- Refactor grid to render 7 columns (Mon-Sun) in weekly mode
-- Week navigation header: `< W16: 13 - 19 Apr 2026 >`
-- Retain existing monthly mode as toggle option
+**Step 1**: Weekly/monthly toggle, grid polish, distribution bar, copy last period ✅ *Implemented 2026-04-10*
+- Add `viewMode` state (`weekly` | `monthly`) — persisted in `localStorage` key `staff.timesheets.viewMode`; falls back to `'monthly'`; URL query param sync deferred
+- Refactor grid to render 7 columns (Mon–Sun) in weekly mode — week is Monday-anchored
+- Week navigation header shows date range (e.g. `Apr 7 – Apr 13, 2026`)
+- Retain monthly mode as toggle — **monthly remains default when no stored preference**
+- i18n keys: `staff.timesheets.my.view_monthly` / `staff.timesheets.my.view_weekly`
+- Switching modes resets unsaved dirty/rawText state and syncs period boundaries
+
+**Step 1b**: Grid visual polish ✅ *Implemented 2026-04-10*
+- **Decimal hour input** — cells display and accept decimal hours (e.g. `4`, `7.5`); consistent with SPEC-069; H:MM removed as out of scope
+- **"X h" / "X.X h" totals** — all row/day totals include unit suffix
+- **Project color dots** — assigned by sequential index in loaded project list (`index % palette`); guarantees distinct adjacent colors; replaced by admin-set color in Phase 3
+- **Distribution bar** — proportional horizontal bar above grid; one segment per project; hidden when total hours = 0
+- **No billable "$" indicator** — removed from project rows; Phase 3 scope
+- **"Copy last week / month"** — plain button (no dropdown chevron); copies previous period's entries into current empty cells; label adapts to view mode
+- **View-adaptive column sizing** — weekly mode: project column `min-w-[240px]`, name text uncapped, day cells `min-w-[40px]` with `px-2` cell padding and `w-12 mx-auto` input; monthly mode: current sizing retained (`min-w-[200px]` project, `min-w-[56px]` days, `max-w-[130px]` name text, `w-full` input)
+- **Uppercase day headers** — weekly column headers show uppercase abbreviation + date (e.g. `MON\n7`)
+
+> **"Without project" row**: Visible in design reference — requires API support for project-less time entries (null `time_project_id`). **Deferred to Phase 2** alongside backend changes.
 
 **Step 2**: Calendar date picker
 - Dropdown component triggered from week navigation
@@ -389,26 +399,26 @@ ALTER TABLE staff_time_projects
 **Step 8**: Color picker UI
 - Color palette component (12 predefined colors)
 - Add to project create dialog and edit page
-- Color dots in grid rows, "+ Add row" dropdown, timer project selector
+- Update color dots in grid rows and timer project selector to prefer admin-set `color` from DB; fall back to sequential-index auto-color (already in place from Step 1b) when `color` is null
 
 **Step 9**: Integration tests
-- Update existing TC-STAFF-020 (grid) for weekly view
+- TC-STAFF-023 (weekly/monthly toggle), TC-STAFF-024 (decimal format), TC-STAFF-025 (distribution bar + color dots), TC-STAFF-026 (copy button) already written in Phase 1 Step 1b ✅
 - New test: timer bar start/stop flow
-- New test: "+ Add row" and project creation from grid
+- New test: "+ Add row" project selector and project creation from grid
 - New test: list view rendering
 
 ### File Manifest
 
 | File | Action | Purpose |
 |------|--------|---------|
-| `packages/core/src/modules/staff/backend/staff/timesheets/page.tsx` | Modify | Rewrite with weekly/monthly toggle, view type toggle, timer bar, + add row |
+| `packages/core/src/modules/staff/backend/staff/timesheets/page.tsx` | Modify | Rewrite with weekly/monthly toggle, view type toggle, timer bar |
 | `packages/core/src/modules/staff/backend/staff/timesheets/components/TimerBar.tsx` | Create | Timer bar component |
 | `packages/core/src/modules/staff/backend/staff/timesheets/components/CalendarPicker.tsx` | Create | Calendar week picker dropdown |
-| `packages/core/src/modules/staff/backend/staff/timesheets/components/AddRowDropdown.tsx` | Create | "+ Add row" project selector |
+| `packages/core/src/modules/staff/backend/staff/timesheets/components/AddRowDropdown.tsx` | Create | Phase 2: "+ Add row" project selector |
 | `packages/core/src/modules/staff/backend/staff/timesheets/components/ListView.tsx` | Create | List view (entries grouped by day) |
 | `packages/core/src/modules/staff/backend/staff/timesheets/components/ColorPicker.tsx` | Create | 12-color palette picker |
 | `packages/core/src/modules/staff/backend/staff/timesheets/components/ViewSwitcher.tsx` | Create | Weekly/Monthly + Timesheet/List toggles |
-| `packages/core/src/modules/staff/backend/staff/timesheets/lib/colors.ts` | Create | PROJECT_COLORS constant + auto-generate helper |
+| `packages/core/src/modules/staff/lib/timesheetUtils.ts` | Already created | `PROJECT_AUTO_COLORS`, `getProjectColor`, and all grid utility functions — extracted in Phase 1 Step 1b |
 | `packages/core/src/modules/staff/backend/staff/timesheets/projects/projectFormConfig.ts` | Modify | Add color field to form config |
 | `packages/core/src/modules/staff/backend/staff/timesheets/projects/[id]/page.tsx` | Modify | Add color dot display |
 | `packages/core/src/modules/staff/data/entities.ts` | Modify | Add `color` field to StaffTimeProject |
@@ -434,13 +444,6 @@ ALTER TABLE staff_time_projects
 - **Affected area**: Bulk save endpoint, timer entries
 - **Mitigation**: Bulk save uses create-or-update logic keyed on (staffMemberId, timeProjectId, date). Timer entries are separate rows (source: 'timer') and grid entries are (source: 'manual'). They coexist — grid cell shows sum of all entries for that project+day.
 - **Residual risk**: None — multiple entries per cell already supported (CellEntry[] pattern from Phase 1)
-
-#### "+ Add Row" Stale Project List
-- **Scenario**: Admin creates a project in another tab; employee's "+ Add row" doesn't show it
-- **Severity**: Low
-- **Affected area**: "+ Add row" dropdown
-- **Mitigation**: Fetch projects on each dropdown open (not cached). Minimal latency impact — small dataset.
-- **Residual risk**: None
 
 #### Color Field Migration on Large Tables
 - **Scenario**: Migration adds nullable column to `staff_time_projects` — potential lock on large tables
@@ -494,7 +497,117 @@ ALTER TABLE staff_time_projects
 
 **Fully compliant** — ready for implementation.
 
+---
+
+## Open Bugs
+
+### BUG-001 — Grid cell background turns white on focus change
+
+**Status**: Resolved — 2026-04-10
+**Severity**: Medium — cosmetic but noticeable; does not affect data correctness
+**Affected file**: `packages/core/src/modules/staff/backend/staff/timesheets/page.tsx`
+
+#### Symptom
+
+After a user enters a value into a timesheet cell and moves focus elsewhere (clicks another cell, clicks a button, navigates month/week, switches view mode), the cell background becomes an opaque white — visually indistinguishable from a browser-default white `<input>`. The amber "unsaved changes" indicator disappears or was never visibly amber to begin with.
+
+#### Steps to Reproduce
+
+1. Open My Timesheets page (weekly or monthly view)
+2. Click any weekday cell for a project row
+3. Type a value (e.g. `4:00`)
+4. Move focus away — click another cell, click the Save button area, navigate to next/prev period, or switch Monthly↔Weekly
+5. **Observe**: the cell background is white / opaque; no amber tint is visible
+
+#### Expected Behaviour
+
+- While the cell contains an unsaved change (`isDirty = true`): background is clearly **amber** (`bg-amber-100`, `#fef3c7`)
+- When clean (loaded from DB, or after save): background is the explicit page background colour with a subtle border — **no surprise colour change** on focus transitions
+
+#### Actual Behaviour
+
+The cell appears white/opaque regardless of state. The amber dirty indicator is either invisible or disappears when focus shifts to a different element.
+
+#### Fix Attempts (all ineffective)
+
+| Attempt | Change | Outcome |
+|---------|--------|---------|
+| 1 | Removed `focus:bg-background` from input class | Fixed white flash *during* typing; issue persisted on blur/navigate |
+| 2 | Changed `bg-amber-50` → `bg-amber-100` | Dirty colour is now more saturated in theory; white-on-blur issue unchanged |
+| 3 | Changed `bg-transparent` → `bg-background` + `border-border` for clean state | Issue still reported; explicit white baseline didn't help |
+
+#### Hypotheses for Root Cause
+
+The following have **not yet been investigated** — need browser devtools to confirm:
+
+1. **CSS variable resolving to white in this context** — `bg-background` and `bg-amber-100` use Tailwind CSS custom properties (`--background`, colour scale). If the CSS variable `--background` or the amber variable is somehow overridden to `#ffffff` at the component level (e.g. a parent sets a different colour scheme), all background classes would render white.
+
+2. **`transition-colors` animating through white** — the `transition-colors` class transitions `background-color`. Going from `rgb(254,243,199)` (amber-100) to `rgb(255,255,255)` (white) passes through near-white intermediate frames. If something is triggering an unintended transition endpoint, the user sees the midpoint (white). Should be testable by temporarily removing `transition-colors`.
+
+3. **Browser UA `:-webkit-autofill` override** — some browsers apply a yellow or white autofill overlay to inputs that have been interacted with. This overlay ignores `background-color` and requires `-webkit-box-shadow: 0 0 0 1000px <color> inset` to override. Visible in DevTools as a `:-webkit-autofill` pseudo-class on the input.
+
+4. **React controlled input re-render resetting paint** — when `value` prop changes (e.g. `rawText` cleared on blur → `minutesToHHMM(cellMinutes)` substituted), React replaces the DOM node's value. Some browser/React combinations repaint the input with the UA default background during this reconciliation cycle before the next frame applies the CSS class.
+
+5. **Tailwind JIT class not generated** — if `bg-amber-100` or `bg-background` are only used inside a template literal (dynamic class), Tailwind's JIT scanner may not include them in the generated CSS bundle. The class would be silently ignored, falling back to the browser's default white. This is a classic Tailwind pitfall with dynamic class construction. **Most likely candidate** — check whether `border-amber-400 bg-amber-100` appears verbatim as a static string somewhere in the file or in the Tailwind safelist.
+
+6. **`bg-background` resolving differently in dark/light mode** — if the app CSS defines `--background: 0 0% 100%` (pure white HSL) and the Tailwind config maps `background: 'hsl(var(--background))'`, then `bg-background` IS white by design. The class doesn't help if the desired "not white" state relies on it.
+
+#### Resolution
+
+**Remove `background-color` from the dirty indicator entirely.** Only the border colour changes between clean and dirty states. The background stays `bg-background` in all states — no transition, no colour override possible.
+
+```
+clean:  border-border   bg-background
+dirty:  border-amber-400 bg-background   ← only border changes
+```
+
+This eliminates the entire class of background-colour fighting between Tailwind, browser UA styles, and React reconciliation. The amber border is sufficient to communicate unsaved state.
+
 ## Changelog
+
+### 2026-04-10 (8)
+- Weekly grid layout: wider project name column (`min-w-[280px]`, uncapped text) and narrower day cells (`min-w-[40px]`, reduced padding) vs monthly sizing; updated wireframe and design decisions
+### 2026-04-11
+- Added `viewMode` localStorage persistence: key `staff.timesheets.viewMode`, fallback `'monthly'`, URL query param sync remains deferred
+
+### 2026-04-10 (9)
+- Refined weekly grid sizing: project column reduced to `min-w-[240px]`; day inputs enlarged to `w-12` (48px) centered with `mx-auto`; `px-2` cell padding retained
+
+### 2026-04-10 (7)
+- Adjusted future steps for overlap with Phase 1 implementation: Step 8 "color dots" is now an update (not new — auto-coloring already in Step 1b); Step 9 test list updated to note TC-STAFF-023/024/025/026 already written; file manifest updated (`lib/colors.ts` → `lib/timesheetUtils.ts` already exists)
+
+### 2026-04-10 (6)
+- Removed "+ Add row" placeholder button from Phase 1 implementation and all related i18n keys (`addRow`, `addRow.search`, `addRow.noProjects`, `addRow.createProject`); feature remains planned under Phase 2 Step 5
+
+### 2026-04-10 (5)
+- Reverted time input format from H:MM back to decimal hours per SPEC-069 (minutes not in scope)
+- Updated wireframe cells and notes to show decimal values (e.g. `7.5` not `7:30`)
+- Placeholder changes from `0:00` to `0`
+
+### 2026-04-10 (4)
+- Documented and resolved BUG-001: grid cell background turns white on focus change
+- Fix: remove background-color from dirty indicator entirely; amber border only; `bg-background` constant in all states
+
+### 2026-04-10 (3)
+- Color strategy: changed from ID-hash to sequential index to guarantee visually distinct adjacent project colors
+- Removed "$" billable indicator from grid rows (deferred to Phase 3)
+- "Copy last week/month" changed from dropdown button to plain button
+
+### 2026-04-10 (2)
+- Added design decisions for H:MM format, auto-color, distribution bar, copy last period
+- Updated weekly grid wireframe to match design reference (screenshot)
+- Added i18n keys: `copyLastWeek`, `copyLastMonth`, `copiedLastPeriod`, `billable`
+- Noted "Without project" row as deferred Phase 2 item (requires backend support)
+- Promoted Step 1b: grid visual polish (decimal hours, color dots, distribution bar, Copy last period)
+
+### 2026-04-10
+- Implemented Phase 1 Step 1: monthly/weekly view toggle in `page.tsx`
+- Replaced day-number arrays with `periodDays` (ISO date string array) covering both modes
+- Added `formatDateFromObj`, `getMonWeekStart`, `isWeekendFromKey` helpers
+- Unified navigation (`goToPrev`/`goToNext`) and period label for both modes
+- Added toggle button group UI (Monthly | Weekly) in the toolbar
+- Added i18n keys `view_monthly` / `view_weekly` to all 4 locale files (en, de, es, pl)
+- **Deferred**: URL query param sync for `viewMode`; weekly-as-default (monthly kept as default)
 
 ### 2026-04-08
 - Initial specification based on PR #1111 review feedback and Toggl Track reference
