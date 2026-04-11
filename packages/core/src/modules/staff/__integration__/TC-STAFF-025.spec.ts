@@ -6,6 +6,7 @@ import {
   assignEmployeeToProjectFixture,
   createTimeEntryFixture,
   deleteStaffEntityIfExists,
+  getOrCreateSelfStaffMemberFixture,
 } from '@open-mercato/core/helpers/integration/timesheetFixtures'
 
 /**
@@ -21,13 +22,9 @@ test.describe('TC-STAFF-025: Distribution Bar and Project Color Dots', () => {
     test.setTimeout(60_000)
 
     const admin = await getAuthToken(request, 'admin')
-    const employeeToken = await getAuthToken(request, 'employee')
     const stamp = Date.now()
 
-    const selfRes = await apiRequest(request, 'GET', '/api/staff/team-members/self', { token: employeeToken })
-    const selfBody = (await selfRes.json()) as { member?: { id?: string } }
-    const employeeStaffMemberId = selfBody.member?.id ?? ''
-    expect(employeeStaffMemberId.length > 0, 'Employee must have a staff member profile').toBeTruthy()
+    const { memberId, createdNew } = await getOrCreateSelfStaffMemberFixture(request, admin)
 
     // Create two distinct projects
     const projectIdA = await createTimeProjectFixture(request, admin, {
@@ -39,33 +36,32 @@ test.describe('TC-STAFF-025: Distribution Bar and Project Color Dots', () => {
       code: `QACB-${stamp}`,
     })
 
-    await assignEmployeeToProjectFixture(request, admin, projectIdA, employeeStaffMemberId)
-    await assignEmployeeToProjectFixture(request, admin, projectIdB, employeeStaffMemberId)
+    await assignEmployeeToProjectFixture(request, admin, projectIdA, memberId)
+    await assignEmployeeToProjectFixture(request, admin, projectIdB, memberId)
 
     // Create one entry per project so grandTotal > 0 (triggers distribution bar)
-    const entryIdA = await createTimeEntryFixture(request, employeeToken, {
-      staffMemberId: employeeStaffMemberId,
+    const entryIdA = await createTimeEntryFixture(request, admin, {
+      staffMemberId: memberId,
       timeProjectId: projectIdA,
       date: '2026-04-07',
       durationMinutes: 120,
     })
-    const entryIdB = await createTimeEntryFixture(request, employeeToken, {
-      staffMemberId: employeeStaffMemberId,
+    const entryIdB = await createTimeEntryFixture(request, admin, {
+      staffMemberId: memberId,
       timeProjectId: projectIdB,
       date: '2026-04-07',
       durationMinutes: 180,
     })
 
     try {
-      await login(page, 'employee')
+      await login(page, 'admin')
       await page.goto('/backend/staff/timesheets')
       await expect(page.getByRole('table')).toBeVisible({ timeout: 30_000 })
 
-      // Distribution bar: a full-width rounded container that appears above the grid
-      // It is a flex div with overflow-hidden rounded-full containing colored segments.
-      // Each segment has a title attribute "ProjectName: X h" and a white label inside.
-      const barAlpha = page.locator('[title*="QA Color Alpha"]')
-      const barBeta = page.locator('[title*="QA Color Beta"]')
+      // Distribution bar: each segment has a title of the form "ProjectName: X h".
+      // Use the ": " suffix to target only bar segments, not project-name cells.
+      const barAlpha = page.locator('[title*="QA Color Alpha"][title*=": "]').first()
+      const barBeta = page.locator('[title*="QA Color Beta"][title*=": "]').first()
       await expect(barAlpha).toBeVisible({ timeout: 15_000 })
       await expect(barBeta).toBeVisible({ timeout: 5_000 })
 
@@ -75,21 +71,26 @@ test.describe('TC-STAFF-025: Distribution Bar and Project Color Dots', () => {
       const dotCount = await colorDots.count()
       expect(dotCount).toBeGreaterThanOrEqual(2)
 
-      // Collect dot colors — the two adjacent projects must have distinct colors
+      // Collect dot colors — the two adjacent projects must have distinct colors.
+      // Browsers may normalize hex (#22C55E) to rgb(34, 197, 94) in inline styles,
+      // so capture the entire background-color value for comparison.
       const colors: string[] = []
       for (let i = 0; i < dotCount; i++) {
         const style = await colorDots.nth(i).getAttribute('style') ?? ''
-        const match = style.match(/background-color:\s*(#[0-9A-Fa-f]{6})/)
-        if (match) colors.push(match[1])
+        const match = style.match(/background-color:\s*([^;]+)/)
+        if (match) colors.push(match[1].trim())
       }
       const colorSet = new Set(colors)
       // At least 2 distinct colors for the 2 project rows
-      expect(colorSet.size).toBeGreaterThanOrEqual(2)
+      expect(colorSet.size, `Expected ≥ 2 distinct colors, got: ${JSON.stringify([...colorSet])}`).toBeGreaterThanOrEqual(2)
     } finally {
-      await apiRequest(request, 'DELETE', `/api/staff/timesheets/time-entries?id=${encodeURIComponent(entryIdA)}`, { token: employeeToken }).catch(() => {})
-      await apiRequest(request, 'DELETE', `/api/staff/timesheets/time-entries?id=${encodeURIComponent(entryIdB)}`, { token: employeeToken }).catch(() => {})
+      await apiRequest(request, 'DELETE', `/api/staff/timesheets/time-entries?id=${encodeURIComponent(entryIdA)}`, { token: admin }).catch(() => {})
+      await apiRequest(request, 'DELETE', `/api/staff/timesheets/time-entries?id=${encodeURIComponent(entryIdB)}`, { token: admin }).catch(() => {})
       await deleteStaffEntityIfExists(request, admin, 'staff/timesheets/time-projects', projectIdA)
       await deleteStaffEntityIfExists(request, admin, 'staff/timesheets/time-projects', projectIdB)
+      if (createdNew) {
+        await deleteStaffEntityIfExists(request, admin, 'staff/team-members', memberId)
+      }
     }
   })
 })

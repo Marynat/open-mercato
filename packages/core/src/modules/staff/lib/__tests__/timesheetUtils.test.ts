@@ -17,6 +17,7 @@ import {
   formatDateKey,
   formatDateFromObj,
   getMonWeekStart,
+  getISOWeekNumber,
   isWeekendFromKey,
   minutesToDecimal,
   decimalToMinutes,
@@ -118,6 +119,45 @@ describe('getMonWeekStart', () => {
     expect(result.getHours()).toBe(0)
     expect(result.getMinutes()).toBe(0)
     expect(result.getSeconds()).toBe(0)
+  })
+})
+
+// ─── getISOWeekNumber ─────────────────────────────────────────────────────────
+
+describe('getISOWeekNumber', () => {
+  it('returns W1 for Jan 1 2026 (Thursday — first week)', () => {
+    expect(getISOWeekNumber(new Date(2026, 0, 1))).toBe(1)
+  })
+
+  it('returns W16 for Mon Apr 13 2026', () => {
+    expect(getISOWeekNumber(new Date(2026, 3, 13))).toBe(16)
+  })
+
+  it('returns W16 for Sun Apr 19 2026 (same week as Apr 13)', () => {
+    expect(getISOWeekNumber(new Date(2026, 3, 19))).toBe(16)
+  })
+
+  it('returns W1 for the Monday starting week 1 (Dec 29 2025 belongs to W1 of 2026)', () => {
+    expect(getISOWeekNumber(new Date(2025, 11, 29))).toBe(1)
+  })
+
+  it('returns W52 for Dec 28 2026 — but actually W53 since Dec 28 is a Monday in its own final week', () => {
+    // Dec 28 2026 is a Monday; its Thursday is Dec 31 → yearStart=2026-01-01
+    // days diff = 364, week = ceil((364+1)/7) = ceil(52.14) = 53
+    expect(getISOWeekNumber(new Date(2026, 11, 28))).toBe(53)
+  })
+
+  it('returns a positive integer for any date', () => {
+    const dates = [
+      new Date(2026, 0, 4),   // Jan 4
+      new Date(2026, 5, 15),  // Jun 15
+      new Date(2026, 11, 31), // Dec 31
+    ]
+    for (const d of dates) {
+      const w = getISOWeekNumber(d)
+      expect(w).toBeGreaterThanOrEqual(1)
+      expect(w).toBeLessThanOrEqual(53)
+    }
   })
 })
 

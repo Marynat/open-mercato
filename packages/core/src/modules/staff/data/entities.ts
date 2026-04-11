@@ -502,6 +502,9 @@ export class StaffTimeProject {
   @Property({ name: 'start_date', type: 'date', nullable: true })
   startDate?: Date | null
 
+  @Property({ type: 'text', nullable: true })
+  color?: string | null
+
   @Property({ name: 'created_at', type: Date, onCreate: () => new Date() })
   createdAt: Date = new Date()
 

@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { CrudField, CrudFormGroup } from '@open-mercato/ui/backend/CrudForm'
 import type { TranslateFn } from '@open-mercato/shared/lib/i18n/context'
+import { ColorPicker } from '@open-mercato/core/modules/staff/lib/timesheets/components/ColorPicker'
 
 export type ProjectFormValues = {
   id?: string
@@ -11,6 +12,7 @@ export type ProjectFormValues = {
   startDate?: string | null
   costCenter?: string | null
   status?: string
+  color?: string | null
 }
 
 export function createProjectFormSchema() {
@@ -22,6 +24,7 @@ export function createProjectFormSchema() {
     startDate: z.string().optional().nullable(),
     costCenter: z.string().max(100).optional().nullable(),
     status: z.enum(['active', 'on_hold', 'completed']).optional(),
+    color: z.string().optional().nullable(),
   })
 }
 
@@ -74,6 +77,13 @@ export function createProjectFormFields(t: TranslateFn): CrudField[] {
       label: t('staff.timesheets.projects.form.costCenter', 'Cost center'),
       placeholder: t('staff.timesheets.projects.form.costCenterPlaceholder', 'Cost center code'),
     },
+    {
+      id: 'color',
+      type: 'custom',
+      label: t('staff.timesheets.projects.form.color', 'Color'),
+      component: ({ value, setValue, disabled }) =>
+        ColorPicker({ value: value as string | null, onChange: setValue, disabled }),
+    },
   ]
 }
 
@@ -82,7 +92,7 @@ export function createProjectFormGroups(t: TranslateFn): CrudFormGroup[] {
     {
       id: 'main',
       title: t('staff.timesheets.projects.form.groupMain', 'Project Details'),
-      fields: ['name', 'code', 'status', 'projectType', 'startDate'],
+      fields: ['name', 'code', 'color', 'status', 'projectType', 'startDate'],
     },
     {
       id: 'details',
@@ -107,5 +117,6 @@ export function buildProjectPayload(values: ProjectFormValues): Record<string, u
   if (values.costCenter?.trim()) payload.costCenter = values.costCenter.trim()
   else payload.costCenter = null
   if (values.status) payload.status = values.status
+  payload.color = values.color ?? null
   return payload
 }

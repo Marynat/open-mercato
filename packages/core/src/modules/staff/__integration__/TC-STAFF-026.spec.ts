@@ -1,7 +1,12 @@
 import { test, expect } from '@playwright/test'
 import { login } from '@open-mercato/core/helpers/integration/auth'
-import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api'
-import { createTimeProjectFixture, assignEmployeeToProjectFixture, deleteStaffEntityIfExists } from '@open-mercato/core/helpers/integration/timesheetFixtures'
+import { getAuthToken } from '@open-mercato/core/helpers/integration/api'
+import {
+  createTimeProjectFixture,
+  assignEmployeeToProjectFixture,
+  deleteStaffEntityIfExists,
+  getOrCreateSelfStaffMemberFixture,
+} from '@open-mercato/core/helpers/integration/timesheetFixtures'
 
 /**
  * TC-STAFF-026: Copy Last Period Button
@@ -22,16 +27,11 @@ test.describe('TC-STAFF-026: Copy Last Period Button', () => {
       code: `QACP-${stamp}`,
     })
 
-    const employeeToken = await getAuthToken(request, 'employee')
-    const selfRes = await apiRequest(request, 'GET', '/api/staff/team-members/self', { token: employeeToken })
-    const selfBody = (await selfRes.json()) as { member?: { id?: string } }
-    const employeeStaffMemberId = selfBody.member?.id ?? ''
-    expect(employeeStaffMemberId.length > 0, 'Employee must have a staff member profile').toBeTruthy()
-
-    await assignEmployeeToProjectFixture(request, admin, projectId, employeeStaffMemberId)
+    const { memberId, createdNew } = await getOrCreateSelfStaffMemberFixture(request, admin)
+    await assignEmployeeToProjectFixture(request, admin, projectId, memberId)
 
     try {
-      await login(page, 'employee')
+      await login(page, 'admin')
       await page.goto('/backend/staff/timesheets')
       await expect(page.getByRole('table')).toBeVisible({ timeout: 30_000 })
 
@@ -54,6 +54,9 @@ test.describe('TC-STAFF-026: Copy Last Period Button', () => {
       await expect(page.getByRole('button', { name: /copy last month/i })).toHaveCount(0)
     } finally {
       await deleteStaffEntityIfExists(request, admin, 'staff/timesheets/time-projects', projectId)
+      if (createdNew) {
+        await deleteStaffEntityIfExists(request, admin, 'staff/team-members', memberId)
+      }
     }
   })
 })

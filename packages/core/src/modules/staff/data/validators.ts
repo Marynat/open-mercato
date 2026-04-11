@@ -304,6 +304,9 @@ export const staffTimeEntrySegmentUpdateSchema = z.object({
   segmentType: timeEntrySegmentTypeSchema.optional(),
 })
 
+const PROJECT_COLOR_KEYS = ['blue', 'green', 'purple', 'red', 'orange', 'yellow', 'pink', 'teal', 'indigo', 'cyan', 'emerald', 'slate'] as const
+const projectColorSchema = z.enum(PROJECT_COLOR_KEYS).optional().nullable()
+
 export const staffTimeProjectCreateSchema = z.object({
   ...scopedCreateFields,
   name: z.string().min(1).max(255),
@@ -315,6 +318,7 @@ export const staffTimeProjectCreateSchema = z.object({
   ownerUserId: z.string().uuid().optional().nullable(),
   costCenter: z.string().max(100).optional().nullable(),
   startDate: z.coerce.date().optional().nullable(),
+  color: projectColorSchema,
 })
 
 export const staffTimeProjectUpdateSchema = z.object({
@@ -328,6 +332,7 @@ export const staffTimeProjectUpdateSchema = z.object({
   ownerUserId: z.string().uuid().optional().nullable(),
   costCenter: z.string().max(100).optional().nullable(),
   startDate: z.coerce.date().optional().nullable(),
+  color: projectColorSchema,
 })
 
 export const staffTimeProjectMemberAssignSchema = z.object({

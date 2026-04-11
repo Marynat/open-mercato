@@ -6,6 +6,7 @@ import {
   assignEmployeeToProjectFixture,
   createTimeEntryFixture,
   deleteStaffEntityIfExists,
+  getOrCreateSelfStaffMemberFixture,
 } from '@open-mercato/core/helpers/integration/timesheetFixtures'
 
 /**
@@ -19,39 +20,33 @@ test.describe('TC-STAFF-024: Decimal Hour Input Format', () => {
   test('should display minutes as decimal hours and show "X h" row totals', async ({ page, request }) => {
     test.setTimeout(60_000)
 
-    const adminToken = await getAuthToken(request, 'employee') // employee creates own entries
+    const admin = await getAuthToken(request, 'admin')
     const stamp = Date.now()
 
-    // Use admin token to create and assign the project
-    const admin = await getAuthToken(request, 'admin')
     const projectId = await createTimeProjectFixture(request, admin, {
       name: `QA Decimal Project ${stamp}`,
       code: `QAD-${stamp}`,
     })
 
-    const selfRes = await apiRequest(request, 'GET', '/api/staff/team-members/self', { token: adminToken })
-    const selfBody = (await selfRes.json()) as { member?: { id?: string } }
-    const employeeStaffMemberId = selfBody.member?.id ?? ''
-    expect(employeeStaffMemberId.length > 0, 'Employee must have a staff member profile').toBeTruthy()
-
-    await assignEmployeeToProjectFixture(request, admin, projectId, employeeStaffMemberId)
+    const { memberId, createdNew } = await getOrCreateSelfStaffMemberFixture(request, admin)
+    await assignEmployeeToProjectFixture(request, admin, projectId, memberId)
 
     // Create two entries: 90 min (→ "1.5") and 60 min (→ "1") in current month (April 2026)
-    const entryIdA = await createTimeEntryFixture(request, adminToken, {
-      staffMemberId: employeeStaffMemberId,
+    const entryIdA = await createTimeEntryFixture(request, admin, {
+      staffMemberId: memberId,
       timeProjectId: projectId,
       date: '2026-04-07',
       durationMinutes: 90,
     })
-    const entryIdB = await createTimeEntryFixture(request, adminToken, {
-      staffMemberId: employeeStaffMemberId,
+    const entryIdB = await createTimeEntryFixture(request, admin, {
+      staffMemberId: memberId,
       timeProjectId: projectId,
       date: '2026-04-08',
       durationMinutes: 60,
     })
 
     try {
-      await login(page, 'employee')
+      await login(page, 'admin')
       await page.goto('/backend/staff/timesheets')
       await expect(page.getByRole('table')).toBeVisible({ timeout: 30_000 })
 
@@ -88,9 +83,12 @@ test.describe('TC-STAFF-024: Decimal Hour Input Format', () => {
         }
       }
     } finally {
-      await apiRequest(request, 'DELETE', `/api/staff/timesheets/time-entries?id=${encodeURIComponent(entryIdA)}`, { token: adminToken }).catch(() => {})
-      await apiRequest(request, 'DELETE', `/api/staff/timesheets/time-entries?id=${encodeURIComponent(entryIdB)}`, { token: adminToken }).catch(() => {})
+      await apiRequest(request, 'DELETE', `/api/staff/timesheets/time-entries?id=${encodeURIComponent(entryIdA)}`, { token: admin }).catch(() => {})
+      await apiRequest(request, 'DELETE', `/api/staff/timesheets/time-entries?id=${encodeURIComponent(entryIdB)}`, { token: admin }).catch(() => {})
       await deleteStaffEntityIfExists(request, admin, 'staff/timesheets/time-projects', projectId)
+      if (createdNew) {
+        await deleteStaffEntityIfExists(request, admin, 'staff/team-members', memberId)
+      }
     }
   })
 })

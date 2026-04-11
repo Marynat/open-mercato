@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from 'react'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { Page, PageBody } from '@open-mercato/ui/backend/Page'
 import { Button } from '@open-mercato/ui/primitives/button'
 import { apiCall, readApiResultOrThrow } from '@open-mercato/ui/backend/utils/apiCall'
@@ -11,18 +12,28 @@ import { useOrganizationScopeVersion } from '@open-mercato/shared/lib/frontend/u
 import { useT } from '@open-mercato/shared/lib/i18n/context'
 import Link from 'next/link'
 
-type ProjectRow = { id: string; name: string; code: string | null }
-type CellEntry = { id?: string; minutes: number }
+type ProjectRow = { id: string; name: string; code: string | null; color?: string | null }
+type CellEntry = {
+  id?: string
+  minutes: number
+  deleteIds?: string[]
+  source?: string
+  startedAt?: string | null
+  endedAt?: string | null
+  notes?: string | null
+}
 type EntryMap = Record<string, Record<string, CellEntry[]>>
 type DirtyMap = Record<string, Record<string, CellEntry>>
 type RawTextMap = Record<string, Record<string, string>>
 type ViewMode = 'monthly' | 'weekly'
+type ViewType = 'timesheet' | 'list'
 
 import {
   getDaysInMonth,
   formatDateKey,
   formatDateFromObj,
   getMonWeekStart,
+  getISOWeekNumber,
   isWeekendFromKey,
   minutesToDecimal,
   decimalToMinutes,
@@ -31,6 +42,11 @@ import {
   parseViewMode,
   TIMESHEET_VIEW_MODE_KEY,
 } from '@open-mercato/core/modules/staff/lib/timesheetUtils'
+import { CalendarPicker } from '@open-mercato/core/modules/staff/lib/timesheets/components/CalendarPicker'
+import { ListView } from '@open-mercato/core/modules/staff/lib/timesheets/components/ListView'
+import { TimerBar } from '@open-mercato/core/modules/staff/lib/timesheets/components/TimerBar'
+import { AddRowDropdown } from '@open-mercato/core/modules/staff/lib/timesheets/components/AddRowDropdown'
+import { CreateProjectDialog } from '@open-mercato/core/modules/staff/lib/timesheets/components/CreateProjectDialog'
 
 const DAY_NAMES_SHORT = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
 
@@ -40,6 +56,17 @@ export default function MyTimesheetsPage() {
   const t = useT()
   const scopeVersion = useOrganizationScopeVersion()
   const { confirm, ConfirmDialogElement } = useConfirmDialog()
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+
+  const viewType = (searchParams.get('viewType') ?? 'timesheet') as ViewType
+
+  const handleSetViewType = React.useCallback((vt: ViewType) => {
+    const params = new URLSearchParams(searchParams.toString())
+    params.set('viewType', vt)
+    router.replace(`${pathname}?${params.toString()}`)
+  }, [searchParams, router, pathname])
 
   const now = new Date()
   const [viewMode, setViewMode] = React.useState<ViewMode>('monthly') // SSR-safe fallback; storage read in effect below
@@ -47,6 +74,8 @@ export default function MyTimesheetsPage() {
   const [month, setMonth] = React.useState(now.getMonth())
   const [weekStart, setWeekStart] = React.useState(() => getMonWeekStart(now))
   const [projects, setProjects] = React.useState<ProjectRow[]>([])
+  const [allAssignedProjects, setAllAssignedProjects] = React.useState<ProjectRow[]>([])
+  const [isCreateProjectOpen, setIsCreateProjectOpen] = React.useState(false)
   const [entries, setEntries] = React.useState<EntryMap>({})
   const [dirty, setDirty] = React.useState<DirtyMap>({})
   const [rawText, setRawText] = React.useState<RawTextMap>({})
@@ -55,6 +84,8 @@ export default function MyTimesheetsPage() {
   const [isLoading, setIsLoading] = React.useState(true)
   const [isSaving, setIsSaving] = React.useState(false)
   const [canManageProjects, setCanManageProjects] = React.useState(false)
+  const [isCalendarOpen, setIsCalendarOpen] = React.useState(false)
+  const calendarRef = React.useRef<HTMLDivElement>(null)
 
   React.useEffect(() => {
     let cancelled = false
@@ -97,9 +128,10 @@ export default function MyTimesheetsPage() {
     }
     const start = new Date(fromDate + 'T00:00:00')
     const end = new Date(toDate + 'T00:00:00')
+    const weekNum = getISOWeekNumber(start)
     const startStr = start.toLocaleString(undefined, { month: 'short', day: 'numeric' })
     const endStr = end.toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
-    return `${startStr} – ${endStr}`
+    return `W${weekNum}: ${startStr} – ${endStr}`
   }, [viewMode, year, month, fromDate, toDate])
 
   const goToPrev = React.useCallback(() => {
@@ -154,6 +186,17 @@ export default function MyTimesheetsPage() {
     setViewMode(mode)
   }, [viewMode, year, month, weekStart])
 
+  React.useEffect(() => {
+    if (!isCalendarOpen) return
+    const handler = (e: PointerEvent) => {
+      if (calendarRef.current && !calendarRef.current.contains(e.target as Node)) {
+        setIsCalendarOpen(false)
+      }
+    }
+    document.addEventListener('pointerdown', handler)
+    return () => document.removeEventListener('pointerdown', handler)
+  }, [isCalendarOpen])
+
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
@@ -201,13 +244,22 @@ export default function MyTimesheetsPage() {
       ])
 
       const projectItems = Array.isArray(projectsRes.items) ? projectsRes.items : []
-      setProjects(projectItems.map((item) => ({
+      const mappedProjects = projectItems.map((item) => ({
         id: String(item.id ?? ''),
         name: String(item.name ?? ''),
         code: typeof item.code === 'string' ? item.code : null,
-      })))
+        color: typeof item.color === 'string' ? item.color : null,
+      }))
+      // allAssignedProjects = everything the user is a member of (feeds Add Row dropdown)
+      setAllAssignedProjects(mappedProjects)
 
       const entryItems = Array.isArray(entriesRes.items) ? entriesRes.items : []
+      // projects (grid rows) = only those with at least one entry in this period;
+      // Add Row lets the user surface the remaining assigned projects for data entry
+      const entryProjectIds = new Set(
+        entryItems.map((item) => String(item.time_project_id ?? item.timeProjectId ?? '')).filter((id) => id.length > 0),
+      )
+      setProjects(mappedProjects.filter((p) => entryProjectIds.has(p.id)))
       const map: EntryMap = {}
       for (const item of entryItems) {
         const projectId = String(item.time_project_id ?? item.timeProjectId ?? '')
@@ -219,15 +271,25 @@ export default function MyTimesheetsPage() {
             ? item.durationMinutes
             : 0
         const entryId = String(item.id ?? '')
+        const source = typeof item.source === 'string' ? item.source : 'manual'
+        const startedAt = item.started_at ?? item.startedAt
+        const endedAt = item.ended_at ?? item.endedAt
+        const notes = typeof item.notes === 'string' ? item.notes : null
         if (!map[projectId]) map[projectId] = {}
         if (!map[projectId][dateKey]) map[projectId][dateKey] = []
-        map[projectId][dateKey].push({ id: entryId || undefined, minutes })
+        map[projectId][dateKey].push({
+          id: entryId || undefined,
+          minutes,
+          source,
+          startedAt: startedAt != null ? String(startedAt) : null,
+          endedAt: endedAt != null ? String(endedAt) : null,
+          notes,
+        })
       }
       setEntries(map)
       setDirty({})
       setRawText({})
-    } catch (error) {
-      console.error('staff.timesheets.my.load', error)
+    } catch {
       flash(t('staff.timesheets.my.errors.load', 'Failed to load timesheets.'), 'error')
     } finally {
       setIsLoading(false)
@@ -253,8 +315,23 @@ export default function MyTimesheetsPage() {
     setDirty((prev) => {
       const projectEntries: Record<string, CellEntry> = { ...(prev[projectId] ?? {}) }
       const cellEntries = entries[projectId]?.[dateKey] ?? []
-      const firstId = cellEntries[0]?.id
-      projectEntries[dateKey] = { id: firstId, minutes }
+      const allPersisted = cellEntries.filter((e): e is CellEntry & { id: string } => typeof e.id === 'string')
+      // Timer entries carry authoritative startedAt/endedAt — never mutate their duration.
+      // Only manual entries are safe to collapse.
+      const timerEntries = allPersisted.filter((e) => e.source === 'timer')
+      const manualEntries = allPersisted.filter((e) => e.source !== 'timer')
+      const timerSum = timerEntries.reduce((sum, e) => sum + e.minutes, 0)
+
+      // Clamp: cannot enter a total below what timers have already recorded.
+      const manualMinutes = Math.max(minutes, timerSum) - timerSum
+      const firstManualId = manualEntries[0]?.id
+      const extraManualIds = manualEntries.slice(1).map((e) => e.id)
+
+      projectEntries[dateKey] = {
+        ...(firstManualId !== undefined ? { id: firstManualId } : {}),
+        minutes: manualMinutes,
+        ...(extraManualIds.length > 0 ? { deleteIds: extraManualIds } : {}),
+      }
       return { ...prev, [projectId]: projectEntries }
     })
     setRawText((prev) => {
@@ -272,7 +349,14 @@ export default function MyTimesheetsPage() {
 
   const getCellValue = React.useCallback((projectId: string, dateKey: string): number => {
     const dirtyCell = dirty[projectId]?.[dateKey] as CellEntry | undefined
-    if (dirtyCell !== undefined) return dirtyCell.minutes
+    if (dirtyCell !== undefined) {
+      // dirty.minutes is the adjusted manual portion only; add back the preserved timer entries
+      const cellEntries = entries[projectId]?.[dateKey] ?? []
+      const preservedTimerSum = cellEntries
+        .filter((e): e is CellEntry & { id: string } => typeof e.id === 'string' && e.source === 'timer')
+        .reduce((sum, e) => sum + e.minutes, 0)
+      return dirtyCell.minutes + preservedTimerSum
+    }
     const cellEntries = entries[projectId]?.[dateKey] ?? []
     return cellEntries.reduce((sum, e) => sum + e.minutes, 0)
   }, [dirty, entries])
@@ -294,14 +378,19 @@ export default function MyTimesheetsPage() {
       for (const [projectId, dateMap] of Object.entries(dirty)) {
         for (const [dateKey, cellValue] of Object.entries(dateMap)) {
           const cell = cellValue as CellEntry
-          const cellEntries = entries[projectId]?.[dateKey] ?? []
-          const firstId = cell.id ?? cellEntries[0]?.id
+          // cell.id is the explicit manual entry to update (or undefined → create new).
+          // Do NOT fall back to cellEntries[0] — that could be a timer entry whose
+          // duration is locked to its startedAt/endedAt interval.
           bulkEntries.push({
-            id: firstId,
+            id: cell.id,
             date: dateKey,
             timeProjectId: projectId,
             durationMinutes: cell.minutes,
           })
+          // Soft-delete extra entries that were aggregated into this cell
+          for (const extraId of cell.deleteIds ?? []) {
+            bulkEntries.push({ id: extraId, date: dateKey, timeProjectId: projectId, durationMinutes: 0 })
+          }
         }
       }
       if (bulkEntries.length === 0) return
@@ -315,8 +404,7 @@ export default function MyTimesheetsPage() {
 
       flash(t('staff.timesheets.my.saved', 'Timesheet saved.'), 'success')
       await loadData()
-    } catch (error) {
-      console.error('staff.timesheets.my.save', error)
+    } catch {
       flash(t('staff.timesheets.my.errors.save', 'Failed to save timesheets.'), 'error')
     } finally {
       setIsSaving(false)
@@ -408,6 +496,18 @@ export default function MyTimesheetsPage() {
     }
   }, [staffMemberId, periodDays, viewMode, projects, entries, rawText, t])
 
+  const handleTimerStopped = React.useCallback((_projectId: string, _dateKey: string, _durationMinutes: number) => {
+    // Reload from server so the saved timer entry gets its real id.
+    // This prevents subsequent cell edits from seeing a mix of persisted and
+    // id-less in-flight entries, which would otherwise trigger the collapse path.
+    void loadData()
+  }, [loadData])
+
+  const handleProjectCreated = React.useCallback((project: ProjectRow) => {
+    setAllAssignedProjects((prev) => prev.some((p) => p.id === project.id) ? prev : [...prev, project])
+    setProjects((prev) => prev.some((p) => p.id === project.id) ? prev : [...prev, project])
+  }, [])
+
   const getRowTotal = React.useCallback((projectId: string): number => {
     let total = 0
     for (const dateKey of periodDays) {
@@ -484,6 +584,15 @@ export default function MyTimesheetsPage() {
   return (
     <Page>
       <PageBody>
+        {/* Timer bar */}
+        {staffMemberId && (
+          <TimerBar
+            staffMemberId={staffMemberId}
+            projects={allAssignedProjects}
+            onTimerStopped={handleTimerStopped}
+          />
+        )}
+
         {/* Summary cards */}
         <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-4">
           <div className="rounded-lg border bg-card p-4">
@@ -514,6 +623,31 @@ export default function MyTimesheetsPage() {
             <Button variant="outline" size="sm" onClick={goToPrev}>&larr;</Button>
             <span className="text-lg font-semibold min-w-[180px] text-center">{periodLabel}</span>
             <Button variant="outline" size="sm" onClick={goToNext}>&rarr;</Button>
+            {viewMode === 'weekly' && (
+              <div ref={calendarRef} className="relative">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsCalendarOpen((v) => !v)}
+                  aria-label="Open calendar"
+                >
+                  📅
+                </Button>
+                {isCalendarOpen && (
+                  <CalendarPicker
+                    weekStart={weekStart}
+                    onSelectWeek={(monday) => {
+                      setWeekStart(monday)
+                      setDirty({})
+                      setRawText({})
+                      setIsCalendarOpen(false)
+                    }}
+                    onClose={() => setIsCalendarOpen(false)}
+                  />
+                )}
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <div className="flex overflow-hidden rounded-md border">
@@ -534,6 +668,26 @@ export default function MyTimesheetsPage() {
                 onClick={() => handleSetViewMode('weekly')}
               >
                 {t('staff.timesheets.my.view_weekly', 'Weekly')}
+              </Button>
+            </div>
+            <div className="flex overflow-hidden rounded-md border">
+              <Button
+                type="button"
+                size="sm"
+                variant={viewType === 'timesheet' ? 'default' : 'ghost'}
+                className="rounded-none"
+                onClick={() => handleSetViewType('timesheet')}
+              >
+                {t('staff.timesheets.my.viewType.timesheet', 'Timesheet')}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={viewType === 'list' ? 'default' : 'ghost'}
+                className="rounded-none border-l"
+                onClick={() => handleSetViewType('list')}
+              >
+                {t('staff.timesheets.my.viewType.list', 'List view')}
               </Button>
             </div>
             {hasChanges && (
@@ -575,6 +729,15 @@ export default function MyTimesheetsPage() {
           </div>
         ) : (
           <>
+            {viewType === 'list' ? (
+              <ListView
+                projects={projects}
+                entries={entries}
+                periodDays={periodDays}
+                onRefresh={loadData}
+              />
+            ) : (
+            <>
             {/* Project distribution bar */}
             {grandTotal > 0 && (
               <div className="mb-3 flex h-5 w-full overflow-hidden rounded-full">
@@ -582,7 +745,7 @@ export default function MyTimesheetsPage() {
                   const projectTotal = getRowTotal(project.id)
                   if (projectTotal === 0) return null
                   const pct = (projectTotal / grandTotal) * 100
-                  const color = getProjectColor(index)
+                  const color = getProjectColor(index, project.color)
                   return (
                     <div
                       key={project.id}
@@ -626,7 +789,7 @@ export default function MyTimesheetsPage() {
                 </thead>
                 <tbody>
                   {projects.map((project, index) => {
-                    const color = getProjectColor(index)
+                    const color = getProjectColor(index, project.color)
                     return (
                       <tr key={project.id} className="border-b hover:bg-muted/30">
                         <td className="sticky left-0 z-10 bg-background px-3 py-1.5">
@@ -713,10 +876,29 @@ export default function MyTimesheetsPage() {
                 </tfoot>
               </table>
             </div>
+            <AddRowDropdown
+              allAssignedProjects={allAssignedProjects}
+              gridProjectIds={new Set(projects.map((p) => p.id))}
+              canManageProjects={canManageProjects}
+              onAddProject={(project) => {
+                setProjects((prev) => prev.some((p) => p.id === project.id) ? prev : [...prev, project])
+              }}
+              onOpenCreateDialog={() => setIsCreateProjectOpen(true)}
+            />
+            </>
+            )}
           </>
         )}
       </PageBody>
       {ConfirmDialogElement}
+      {staffMemberId && (
+        <CreateProjectDialog
+          open={isCreateProjectOpen}
+          onOpenChange={setIsCreateProjectOpen}
+          staffMemberId={staffMemberId}
+          onProjectCreated={handleProjectCreated}
+        />
+      )}
     </Page>
   )
 }

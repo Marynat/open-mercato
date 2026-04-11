@@ -32,6 +32,7 @@ type TimeProjectSnapshot = {
   ownerUserId: string | null
   costCenter: string | null
   startDate: string | null
+  color: string | null
   deletedAt: string | null
 }
 
@@ -74,6 +75,7 @@ async function loadTimeProjectSnapshot(em: EntityManager, id: string): Promise<T
     ownerUserId: project.ownerUserId ?? null,
     costCenter: project.costCenter ?? null,
     startDate: project.startDate instanceof Date ? project.startDate.toISOString().split('T')[0] : (project.startDate ?? null),
+    color: project.color ?? null,
     deletedAt: project.deletedAt ? project.deletedAt.toISOString() : null,
   }
 }
@@ -116,6 +118,7 @@ const createTimeProjectCommand: CommandHandler<StaffTimeProjectCreateInput, { ti
       ownerUserId: parsed.ownerUserId ?? null,
       costCenter: parsed.costCenter ?? null,
       startDate: parsed.startDate ?? null,
+      color: parsed.color ?? null,
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
@@ -167,7 +170,7 @@ const createTimeProjectCommand: CommandHandler<StaffTimeProjectCreateInput, { ti
     const after = payload?.after
     if (!after) return
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const project = await em.findOne(StaffTimeProject, { id: after.id })
+    const project = await findOneWithDecryption(em, StaffTimeProject, { id: after.id }, undefined, { tenantId: null, organizationId: null })
     if (project) {
       project.deletedAt = new Date()
       await em.flush()
@@ -219,6 +222,7 @@ const updateTimeProjectCommand: CommandHandler<StaffTimeProjectUpdateInput, { ti
     if (parsed.ownerUserId !== undefined) project.ownerUserId = parsed.ownerUserId ?? null
     if (parsed.costCenter !== undefined) project.costCenter = parsed.costCenter ?? null
     if (parsed.startDate !== undefined) project.startDate = parsed.startDate ?? null
+    if (parsed.color !== undefined) project.color = parsed.color ?? null
     project.updatedAt = new Date()
     await em.flush()
 
@@ -252,6 +256,7 @@ const updateTimeProjectCommand: CommandHandler<StaffTimeProjectUpdateInput, { ti
       'ownerUserId',
       'costCenter',
       'startDate',
+      'color',
       'deletedAt',
     ])
     const { translate } = await resolveTranslations()
@@ -277,7 +282,7 @@ const updateTimeProjectCommand: CommandHandler<StaffTimeProjectUpdateInput, { ti
     const before = payload?.before
     if (!before) return
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const project = await em.findOne(StaffTimeProject, { id: before.id })
+    const project = await findOneWithDecryption(em, StaffTimeProject, { id: before.id }, undefined, { tenantId: null, organizationId: null })
     if (!project) return
     project.name = before.name
     project.customerId = before.customerId ?? null
@@ -288,6 +293,7 @@ const updateTimeProjectCommand: CommandHandler<StaffTimeProjectUpdateInput, { ti
     project.ownerUserId = before.ownerUserId ?? null
     project.costCenter = before.costCenter ?? null
     project.startDate = before.startDate ? new Date(before.startDate) : null
+    project.color = before.color ?? null
     project.deletedAt = before.deletedAt ? new Date(before.deletedAt) : null
     project.updatedAt = new Date()
     await em.flush()
@@ -371,7 +377,7 @@ const deleteTimeProjectCommand: CommandHandler<{ id?: string }, { timeProjectId:
     const before = payload?.before
     if (!before) return
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    let project = await em.findOne(StaffTimeProject, { id: before.id })
+    let project = await findOneWithDecryption(em, StaffTimeProject, { id: before.id }, undefined, { tenantId: null, organizationId: null })
     if (!project) {
       project = em.create(StaffTimeProject, {
         id: before.id,
@@ -477,7 +483,7 @@ const assignTimeProjectMemberCommand: CommandHandler<StaffTimeProjectMemberAssig
     const after = payload?.after
     if (!after) return
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const member = await em.findOne(StaffTimeProjectMember, { id: after.id })
+    const member = await findOneWithDecryption(em, StaffTimeProjectMember, { id: after.id }, undefined, { tenantId: null, organizationId: null })
     if (member) {
       member.deletedAt = new Date()
       await em.flush()
@@ -539,7 +545,7 @@ const unassignTimeProjectMemberCommand: CommandHandler<{ id?: string }, { timePr
     const before = payload?.before
     if (!before) return
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    let member = await em.findOne(StaffTimeProjectMember, { id: before.id })
+    let member = await findOneWithDecryption(em, StaffTimeProjectMember, { id: before.id }, undefined, { tenantId: null, organizationId: null })
     if (!member) {
       member = em.create(StaffTimeProjectMember, {
         id: before.id,

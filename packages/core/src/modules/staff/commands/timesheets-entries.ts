@@ -130,7 +130,7 @@ const createTimeEntryCommand: CommandHandler<StaffTimeEntryCreateInput, { timeEn
     const after = payload?.after
     if (!after) return
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const entry = await em.findOne(StaffTimeEntry, { id: after.id })
+    const entry = await findOneWithDecryption(em, StaffTimeEntry, { id: after.id }, undefined, { tenantId: null, organizationId: null })
     if (entry) {
       entry.deletedAt = new Date()
       await em.flush()
@@ -228,7 +228,7 @@ const updateTimeEntryCommand: CommandHandler<StaffTimeEntryUpdateInput, { timeEn
     const before = payload?.before
     if (!before) return
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    const entry = await em.findOne(StaffTimeEntry, { id: before.id })
+    const entry = await findOneWithDecryption(em, StaffTimeEntry, { id: before.id }, undefined, { tenantId: null, organizationId: null })
     if (!entry) return
     entry.date = before.date as unknown as Date
     entry.durationMinutes = before.durationMinutes
@@ -313,7 +313,7 @@ const deleteTimeEntryCommand: CommandHandler<{ id?: string }, { timeEntryId: str
     const before = payload?.before
     if (!before) return
     const em = (ctx.container.resolve('em') as EntityManager).fork()
-    let entry = await em.findOne(StaffTimeEntry, { id: before.id })
+    let entry = await findOneWithDecryption(em, StaffTimeEntry, { id: before.id }, undefined, { tenantId: null, organizationId: null })
     if (!entry) {
       entry = em.create(StaffTimeEntry, {
         id: before.id,

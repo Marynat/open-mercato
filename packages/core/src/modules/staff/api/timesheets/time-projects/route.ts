@@ -21,6 +21,7 @@ const F = {
   owner_user_id: 'owner_user_id',
   cost_center: 'cost_center',
   start_date: 'start_date',
+  color: 'color',
   created_at: 'created_at',
   updated_at: 'updated_at',
   deleted_at: 'deleted_at',
@@ -77,6 +78,7 @@ const crud = makeCrudRoute({
       F.owner_user_id,
       F.cost_center,
       F.start_date,
+      F.color,
       F.created_at,
       F.updated_at,
     ],
@@ -167,6 +169,7 @@ const timeProjectListItemSchema = z.object({
   owner_user_id: z.string().uuid().nullable().optional(),
   cost_center: z.string().nullable().optional(),
   start_date: z.string().nullable().optional(),
+  color: z.string().nullable().optional(),
   created_at: z.string().nullable().optional(),
   updated_at: z.string().nullable().optional(),
 })

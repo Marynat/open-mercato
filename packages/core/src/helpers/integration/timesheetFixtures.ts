@@ -2,6 +2,38 @@ import { expect, type APIRequestContext } from '@playwright/test'
 import { apiRequest } from './api'
 import { deleteStaffEntityIfExists } from './staffFixtures'
 
+/**
+ * Create (or retrieve if already exists) the staff member profile linked to the
+ * authenticated user identified by `token`.
+ *
+ * Returns the member ID and a flag indicating whether the profile was freshly
+ * created so callers can clean up conditionally.
+ */
+export async function getOrCreateSelfStaffMemberFixture(
+  request: APIRequestContext,
+  token: string,
+): Promise<{ memberId: string; createdNew: boolean }> {
+  const createRes = await apiRequest(request, 'POST', '/api/staff/team-members/self', {
+    token,
+    data: { displayName: 'QA Test Member' },
+  })
+
+  if (createRes.status() === 201) {
+    const body = (await createRes.json()) as { id?: string }
+    if (typeof body.id === 'string' && body.id.length > 0) {
+      return { memberId: body.id, createdNew: true }
+    }
+  }
+
+  // 409 = profile already exists; retrieve it
+  const selfRes = await apiRequest(request, 'GET', '/api/staff/team-members/self', { token })
+  expect(selfRes.ok(), 'GET /api/staff/team-members/self should succeed after create-or-409').toBeTruthy()
+  const selfBody = (await selfRes.json()) as { member?: { id?: string } }
+  const memberId = selfBody.member?.id ?? ''
+  expect(memberId.length > 0, 'Staff member profile must exist after getOrCreate').toBeTruthy()
+  return { memberId, createdNew: false }
+}
+
 export async function createTimeProjectFixture(
   request: APIRequestContext,
   token: string,

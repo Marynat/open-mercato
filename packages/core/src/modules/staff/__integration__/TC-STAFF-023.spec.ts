@@ -1,7 +1,12 @@
 import { test, expect } from '@playwright/test'
 import { login } from '@open-mercato/core/helpers/integration/auth'
-import { apiRequest, getAuthToken } from '@open-mercato/core/helpers/integration/api'
-import { createTimeProjectFixture, assignEmployeeToProjectFixture, deleteStaffEntityIfExists } from '@open-mercato/core/helpers/integration/timesheetFixtures'
+import { getAuthToken } from '@open-mercato/core/helpers/integration/api'
+import {
+  createTimeProjectFixture,
+  assignEmployeeToProjectFixture,
+  deleteStaffEntityIfExists,
+  getOrCreateSelfStaffMemberFixture,
+} from '@open-mercato/core/helpers/integration/timesheetFixtures'
 
 /**
  * TC-STAFF-023: Weekly / Monthly View Toggle
@@ -18,16 +23,11 @@ test.describe('TC-STAFF-023: Weekly / Monthly View Toggle', () => {
       code: `QAT-${Date.now()}`,
     })
 
-    const employeeToken = await getAuthToken(request, 'employee')
-    const selfRes = await apiRequest(request, 'GET', '/api/staff/team-members/self', { token: employeeToken })
-    const selfBody = (await selfRes.json()) as { member?: { id?: string } }
-    const employeeStaffMemberId = selfBody.member?.id ?? ''
-    expect(employeeStaffMemberId.length > 0, 'Employee must have a staff member profile').toBeTruthy()
-
-    await assignEmployeeToProjectFixture(request, adminToken, projectId, employeeStaffMemberId)
+    const { memberId, createdNew } = await getOrCreateSelfStaffMemberFixture(request, adminToken)
+    await assignEmployeeToProjectFixture(request, adminToken, projectId, memberId)
 
     try {
-      await login(page, 'employee')
+      await login(page, 'admin')
       await page.goto('/backend/staff/timesheets')
       await expect(page.getByRole('table')).toBeVisible({ timeout: 30_000 })
 
@@ -44,9 +44,9 @@ test.describe('TC-STAFF-023: Weekly / Monthly View Toggle', () => {
       // Monthly: 1 (project) + 28-31 (days) + 1 (Total) = 30-33
       expect(headerCount).toBeGreaterThanOrEqual(30)
 
-      // Switch to Weekly view
+      // Switch to Weekly view — wait for MON header to confirm re-render
       await weeklyBtn.click()
-      await page.waitForTimeout(300)
+      await expect(page.getByText('MON').first()).toBeVisible({ timeout: 10_000 })
 
       // Weekly view: exactly 7 day columns + 1 project col + 1 total col = 9 headers
       const weeklyHeaderCells = page.locator('thead th')
@@ -63,14 +63,17 @@ test.describe('TC-STAFF-023: Weekly / Monthly View Toggle', () => {
       const labelText = await periodLabel.textContent()
       expect(labelText).toMatch(/[–\-]/)
 
-      // Switch back to Monthly view
+      // Switch back to Monthly view and wait for the table to re-render
       await monthlyBtn.click()
-      await page.waitForTimeout(300)
+      await expect(page.locator('thead th').nth(29)).toBeVisible({ timeout: 10_000 })
 
       const monthlyHeaderCount = await page.locator('thead th').count()
       expect(monthlyHeaderCount).toBeGreaterThanOrEqual(30)
     } finally {
       await deleteStaffEntityIfExists(request, adminToken, 'staff/timesheets/time-projects', projectId)
+      if (createdNew) {
+        await deleteStaffEntityIfExists(request, adminToken, 'staff/team-members', memberId)
+      }
     }
   })
 })

@@ -1,7 +1,12 @@
 import { test, expect } from '@playwright/test'
 import { login } from '@open-mercato/core/helpers/integration/auth'
-import { getAuthToken, apiRequest } from '@open-mercato/core/helpers/integration/api'
-import { createTimeProjectFixture, assignEmployeeToProjectFixture, deleteStaffEntityIfExists } from '@open-mercato/core/helpers/integration/timesheetFixtures'
+import { getAuthToken } from '@open-mercato/core/helpers/integration/api'
+import {
+  createTimeProjectFixture,
+  assignEmployeeToProjectFixture,
+  deleteStaffEntityIfExists,
+  getOrCreateSelfStaffMemberFixture,
+} from '@open-mercato/core/helpers/integration/timesheetFixtures'
 
 const STORAGE_KEY = 'staff.timesheets.viewMode'
 
@@ -23,16 +28,11 @@ test.describe('TC-STAFF-027: View Mode Persistence', () => {
       code: `QAPP-${stamp}`,
     })
 
-    const employeeToken = await getAuthToken(request, 'employee')
-    const selfRes = await apiRequest(request, 'GET', '/api/staff/team-members/self', { token: employeeToken })
-    const selfBody = (await selfRes.json()) as { member?: { id?: string } }
-    const employeeStaffMemberId = selfBody.member?.id ?? ''
-    expect(employeeStaffMemberId.length > 0, 'Employee must have a staff member profile').toBeTruthy()
-
-    await assignEmployeeToProjectFixture(request, admin, projectId, employeeStaffMemberId)
+    const { memberId, createdNew } = await getOrCreateSelfStaffMemberFixture(request, admin)
+    await assignEmployeeToProjectFixture(request, admin, projectId, memberId)
 
     try {
-      await login(page, 'employee')
+      await login(page, 'admin')
 
       // Clear any pre-existing stored preference so the test starts from a known state
       await page.evaluate((key) => localStorage.removeItem(key), STORAGE_KEY)
@@ -91,6 +91,9 @@ test.describe('TC-STAFF-027: View Mode Persistence', () => {
       // Restore neutral state so other tests are not affected
       await page.evaluate((key) => localStorage.removeItem(key), STORAGE_KEY).catch(() => {})
       await deleteStaffEntityIfExists(request, admin, 'staff/timesheets/time-projects', projectId)
+      if (createdNew) {
+        await deleteStaffEntityIfExists(request, admin, 'staff/team-members', memberId)
+      }
     }
   })
 })

@@ -13,7 +13,7 @@ export const setup: ModuleSetupConfig = {
   },
 
   defaultRoleFeatures: {
-    admin: ['staff.*', 'staff.leave_requests.manage'],
+    admin: ['staff.*', 'staff.leave_requests.manage', 'staff.timesheets.manage_all'],
     employee: [
       'staff.leave_requests.send',
       'staff.my_availability.view',

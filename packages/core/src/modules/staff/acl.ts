@@ -16,9 +16,6 @@ export const features = [
   { id: 'staff.timesheets.projects.view', title: 'View time projects', module: 'staff' },
   { id: 'staff.timesheets.projects.manage', title: 'Manage time projects', module: 'staff' },
 
-  // Timesheets (Phase 2)
-  { id: 'staff.timesheets.approve', title: 'Approve reportee time', module: 'staff' },
-  { id: 'staff.timesheets.lock', title: 'Lock time periods', module: 'staff' },
 ]
 
 export default features

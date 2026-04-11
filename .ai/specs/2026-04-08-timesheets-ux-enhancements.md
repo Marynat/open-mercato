@@ -356,26 +356,32 @@ ALTER TABLE staff_time_projects
 
 > **"Without project" row**: Visible in design reference — requires API support for project-less time entries (null `time_project_id`). **Deferred to Phase 2** alongside backend changes.
 
-**Step 2**: Calendar date picker
-- Dropdown component triggered from week navigation
-- Month calendar with week rows (W14, W15...)
-- "This week" / "Last week" quick links
-- Click week → update grid date range
+**Step 2**: Calendar date picker ✅ *Implemented 2026-04-10*
+- Dropdown component triggered from `📅` button (weekly mode only) in the navigation toolbar
+- Month calendar with Monday-anchored week rows (W14, W15...); outside-click closes dropdown
+- "This week" / "Last week" quick links at the top
+- Click week row → update `weekStart`, reset dirty/rawText, close picker
+- Period label updated to include ISO week number: `W{n}: {startStr} – {endStr}`
+- `getISOWeekNumber` added to `timesheetUtils.ts`
 
-**Step 3**: View type toggle (Timesheet | List view)
-- Add `viewType` state (`timesheet` | `list`) with URL query param
-- Toggle buttons in header
-- List view component: entries grouped by day
-- Timer entries show time range; manual entries show duration only
+**Step 3**: View type toggle (Timesheet | List view) ✅ *Implemented 2026-04-11*
+- Add `viewType` state (`timesheet` | `list`) with URL query param (`?viewType=list|timesheet`)
+- Toggle buttons [Timesheet][List view] added to header toolbar
+- `ListView.tsx` component: entries grouped by day, most recent first; day headers (Today/Yesterday/date); color dots + project name per row; timer entries show time range, manual entries show duration
+- `CellEntry` type extended with `source`, `startedAt`, `endedAt`, `notes`; `loadData` captures these fields
+- Description inline editable (PUT on blur if changed)
+- TC-STAFF-029 integration test written
 
 ### Phase 2: Timer Bar & Project Management
 
-**Step 4**: Timer bar at top of page
+**Step 4**: Timer bar at top of page ✅ *Implemented 2026-04-11*
 - "What are you working on?" input + project selector dropdown
 - Play button: create entry + start timer via existing API
 - Running state: elapsed time display, project tag
 - Stop button: stop timer → update grid state immediately (no refresh)
 - Project selector: assigned projects with color dots
+- **Project is required** to start the timer. Start button is disabled and a hint is shown (`staff.timesheets.my.timer.selectProjectHint`) when no project is selected. Full project-less entry support (null `time_project_id`) remains deferred — it requires a dedicated "No project" row/section in both the grid and list view, plus structural changes to the `entries` data model (currently keyed by `projectId`).
+- TC-STAFF-030 integration test written
 
 **Step 5**: "+ Add row" with project selector
 - Inline dropdown below last project row
@@ -403,6 +409,7 @@ ALTER TABLE staff_time_projects
 
 **Step 9**: Integration tests
 - TC-STAFF-023 (weekly/monthly toggle), TC-STAFF-024 (decimal format), TC-STAFF-025 (distribution bar + color dots), TC-STAFF-026 (copy button) already written in Phase 1 Step 1b ✅
+- TC-STAFF-028 (calendar date picker) already written in Phase 1 Step 2 ✅
 - New test: timer bar start/stop flow
 - New test: "+ Add row" project selector and project creation from grid
 - New test: list view rendering
@@ -565,10 +572,28 @@ This eliminates the entire class of background-colour fighting between Tailwind,
 
 ## Changelog
 
+### 2026-04-10 (10)
+- Implemented Phase 1 Step 2: Calendar date picker
+- Added `getISOWeekNumber` utility to `timesheetUtils.ts` (ISO 8601 week number, UTC-based calculation)
+- Created `components/CalendarPicker.tsx`: month calendar with Monday-anchored week rows (W{n}), "This week" / "Last week" shortcuts, month navigation, currently selected week highlighted
+- Updated `periodLabel` in weekly mode to include ISO week number prefix: `W{n}: {startStr} – {endStr}`
+- Added `isCalendarOpen` state and `calendarRef` with outside-click detection in `page.tsx`
+- Added `📅` trigger button (weekly mode only) in the navigation toolbar; clicking it toggles CalendarPicker dropdown
+- Added i18n keys `staff.timesheets.my.calendar.thisWeek` / `staff.timesheets.my.calendar.lastWeek` to all 4 locale files (en, de, es, pl)
+- Added 6 unit tests for `getISOWeekNumber` (56 total, all passing)
+- Added integration test TC-STAFF-028: calendar dropdown visibility, W{n}: period label, "Last week" / "This week" quick links, week row selection, close-on-select, outside-click close
+
 ### 2026-04-10 (8)
 - Weekly grid layout: wider project name column (`min-w-[280px]`, uncapped text) and narrower day cells (`min-w-[40px]`, reduced padding) vs monthly sizing; updated wireframe and design decisions
 ### 2026-04-11
 - Added `viewMode` localStorage persistence: key `staff.timesheets.viewMode`, fallback `'monthly'`, URL query param sync remains deferred
+- Implemented Phase 1 Step 3: View type toggle (Timesheet | List view)
+- Extended `CellEntry` type with `source`, `startedAt`, `endedAt`, `notes`; `loadData` now captures these fields from API response
+- Added `viewType` URL query param (`?viewType=list|timesheet`) using `useSearchParams`/`useRouter`/`usePathname`
+- Added [Timesheet][List view] toggle button group in toolbar alongside existing Monthly/Weekly toggle
+- Created `components/ListView.tsx`: entries grouped by day most-recent-first; Today/Yesterday/date day headers with day total (H:MM:SS); per-entry color dot + project name + time range (timer) or duration (manual); inline description editing (PUT on blur)
+- Added i18n keys `viewType.timesheet`, `viewType.list`, `list.today`, `list.yesterday`, `list.addDescription`, `noEntries` to all 4 locale files (en, de, es, pl)
+- Added integration test TC-STAFF-029: viewType toggle buttons, URL param update, list view rendering, color dots, project name, grid restored on Timesheet click
 
 ### 2026-04-10 (9)
 - Refined weekly grid sizing: project column reduced to `min-w-[240px]`; day inputs enlarged to `w-12` (48px) centered with `mx-auto`; `px-2` cell padding retained

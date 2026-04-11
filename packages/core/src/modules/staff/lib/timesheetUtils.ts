@@ -76,6 +76,20 @@ export function minutesToHoursLabel(minutes: number): string {
   return rounded % 1 === 0 ? `${rounded} h` : `${rounded.toFixed(1)} h`
 }
 
+// ─── Week number ─────────────────────────────────────────────────────────────
+
+/**
+ * Return the ISO 8601 week number for the given date.
+ * Week 1 is the week containing the first Thursday of the year (Mon-anchored).
+ */
+export function getISOWeekNumber(date: Date): number {
+  const tmp = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()))
+  const dayNum = tmp.getUTCDay() || 7 // Sun=0→7, Mon=1, …, Sat=6
+  tmp.setUTCDate(tmp.getUTCDate() + 4 - dayNum) // Thursday of this ISO week
+  const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1))
+  return Math.ceil(((tmp.getTime() - yearStart.getTime()) / 86_400_000 + 1) / 7)
+}
+
 // ─── View mode persistence helpers ───────────────────────────────────────────
 
 export const TIMESHEET_VIEW_MODE_KEY = 'staff.timesheets.viewMode'
@@ -96,11 +110,27 @@ export const PROJECT_AUTO_COLORS = [
   '#6366F1', '#06B6D4', '#10B981', '#64748B',
 ] as const
 
+export const PROJECT_COLOR_MAP: Record<string, string> = {
+  green:   '#22C55E',
+  blue:    '#3B82F6',
+  purple:  '#A855F7',
+  red:     '#EF4444',
+  orange:  '#F97316',
+  yellow:  '#EAB308',
+  pink:    '#EC4899',
+  teal:    '#14B8A6',
+  indigo:  '#6366F1',
+  cyan:    '#06B6D4',
+  emerald: '#10B981',
+  slate:   '#64748B',
+}
+
 /**
- * Return a deterministic colour for a project by its position index in the
- * loaded list. Sequential assignment guarantees adjacent projects always get
- * distinct colours. Wraps around the 12-colour palette.
+ * Return a colour for a project. Prefers the admin-set DB colour key when
+ * provided; falls back to a deterministic sequential-index auto-colour so
+ * adjacent projects always get distinct colours.
  */
-export function getProjectColor(index: number): string {
+export function getProjectColor(index: number, dbColor?: string | null): string {
+  if (dbColor && PROJECT_COLOR_MAP[dbColor]) return PROJECT_COLOR_MAP[dbColor]!
   return PROJECT_AUTO_COLORS[index % PROJECT_AUTO_COLORS.length] ?? '#64748B'
 }
